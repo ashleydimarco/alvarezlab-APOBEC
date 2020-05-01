@@ -1,0 +1,741 @@
+\documentclass[xcolor=x11names,compress]{beamer} 
+
+\usetheme{Berlin}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamerfont{frametitle}{size=\footnotesize}
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd{\slideentry}{\advance\beamer@xpos by1\relax}{}{}{}    
+\newcommand*{\nofurther@beamer@link}{\gdef\beamer@link(##1/##2){}}
+\pretocmd{\beamer@link}{\nofurther@beamer@link}{}{}
+\let\beamer@linkorig=\beamer@link
+\def\beamer@subsectionentry#1#2#3#4#5{\advance\beamer@xpos by1\relax\let\beamer@link=\beamer@linkorig}
+\makeatother
+
+
+\usepackage{bbm}
+\usepackage{amstext}
+\usepackage{graphicx} % Allows including images
+\usepackage{booktabs} % Allows the use of \toprule, \midrule and \bottomrule in tables
+\usepackage{color}
+\usepackage{xcolor}
+\usepackage{rotating}
+\setbeamertemplate{caption}[numbered]
+\usepackage{listings}
+%----------------------------------------------------------------------------------------
+%	TITLE PAGE
+%----------------------------------------------------------------------------------------
+
+\title{DiMarco Immune Signatures Correlation Analysis}
+
+\institute 
+{
+    DCI Shared Resources Bioinformatics \\ % Your institution for the title page
+    \color{blue}{dcibioinformatics@duke.edu}\\
+}
+\date{\today} % Date, can be changed to a custom date
+
+%----------------------------------------------------------------------------------------
+%	DOCUMENT
+%----------------------------------------------------------------------------------------
+\begin{document}
+
+<<globalsetup,echo=FALSE, include=FALSE>>=
+rm(list=ls())
+stdt<-date()
+set.seed(275312)
+options(tide=TRUE, width = 75, digits=3)
+p16 <- c("dodgerblue2", "#E31A1C", "green4", "#6A3D9A", "#FF7F00", "black", "gold1", "skyblue2", "palegreen2", "#FDBF6F", "gray70", "maroon", "orchid1", "darkturquoise", "darkorange4", "brown") 
+opts_chunk$set(
+               dev='png',
+               fig.align='center',
+               fig.show='hold',
+               size='tiny',
+               fig.width=10, fig.height=6,
+               out.width='.9\\linewidth',
+               comment="",
+               warning=FALSE,
+               cache=FALSE,
+               error=FALSE,
+               message=FALSE,
+               dpi=300
+               )
+@ 
+
+<<helpers, echo=F>>=
+sanitize_text <- function(x){
+  gsub("\\_", "\\\\_", x)
+}
+
+scale_rows = function(x){
+    m = apply(x, 1, mean, na.rm = T)
+    s = apply(x, 1, sd, na.rm = T)
+    return((x - m) / s)
+}
+printab <- function(tab, top=1:36, cap=NULL,  scale = 0.8, align=NULL, ...){
+  n <- min(max(top), nrow(tab))
+  tab <- tab[1:n, ]
+  pvars <- grep("pval|qval", colnames(tab), value = T)
+  tab[,pvars] <- sapply(tab[,pvars], formatC, digits=2, format="e")
+  print(xtable(tab, caption = cap, align=align, digits=3), 
+      scale = scale,
+      caption.placement = "top", ...)
+}
+@
+
+
+\begin{frame}
+\titlepage % Print the title page as the first slide
+\end{frame}
+
+\tiny
+%slide#2
+\begin{frame}[fragile]
+\frametitle{Overview} % Table of contents slide, comment this block out to remove it
+\tableofcontents %
+\end{frame}
+
+%----------------------------------------------------------------------------------------
+%	PRESENTATION SLIDES
+%----------------------------------------------------------------------------------------
+%------------------------------------------------
+
+\section{Prerequisites}
+\begin{frame}[fragile]{Prerequisites}
+<<echo=TRUE,results='markup'>>=
+library(knitr)
+library(tidyverse)
+library(xtable)
+library(openxlsx)
+library(reshape2)
+library(ggcorrplot)
+library(Biostrings)
+library(edgeR)
+library(limma)
+library(SummarizedExperiment)
+library(ggcorrplot)
+library(ComplexHeatmap)
+library(circlize)
+library(MASS)
+root <- "/data1/workspace/DCI/Force"
+root <- "~/Desktop/Alvarez"
+dir_data <- file.path(root, "Data")
+# 
+# load(file.path(dir_data, "BRCA_Expression.RData"))
+# load(file.path(dir_data, "BRCA_MAF.RData"))
+# load(file.path(root, "APOBEC/Data/BRCA_Clinical.RData")) # clinical data
+# load(file.path(root, "APOBEC/Data/BRCA_MAF.RData"))  # mutation data
+# load(file.path(root, "Data/cleaned.RData"))   # expression data
+# load(file.path(root, "tmp.RData"))
+# load(file.path(root, "Immune_Signature/Results/DiMarco-APOBEC-Immune-Signature-Data.RData"))
+@ 
+\end{frame}
+
+<<echo=F>>=
+query <- F
+preprocess <- F
+run <- F
+
+if(run == F){
+  load(file.path(dir_data, "tcga-brca_cleaned.RData"))
+} else {
+  if(preprocess == F){
+    load(file.path(dir_data, "tcga-brca_apobec-enrichment_mutect2.RData"))
+    load(file.path(dir_data, "tcga-brca_rse_proc.RData"))
+    load(file.path(dir_data, "signatures_immune.RData"))
+  } else {
+    if(query == F){
+      load(file.path(dir_data, "fasta_grch38_chr24.RData"))
+      load(file.path(dir_data, "tcga-brca_maf_mutect2.RData"))
+      load(file.path(dir_data, "tcga-brca_rse_raw.RData"))
+    }
+  } 
+}
+@
+
+
+\section{Data}
+\subsection{Reference Genome}
+\begin{frame}[fragile]{Reference file}
+<<eval=query, results="markup">>=
+# https://gdc.cancer.gov/about-data/data-harmonization-and-generation/gdc-reference-files
+# Fasta
+grch38 <- readDNAStringSet(file.path(wd, "Data/Reference/GRCh38.d1.vd1.fa"))
+chr24 <- grch38[1:24]
+names(chr24) <- paste0("chr", c(1:22, "X", "Y"))
+# Check
+# identical(snv_mt2$ref,
+#           mapply(function(ch, p) as.character(chr24[[ch]][p]),
+#                  ch=snv_mt2$chr, p=snv_mt2$pos, USE.NAMES = F))
+save(chr24,
+     file = file.path(dir_data, "fasta_grch38_chr24.RData"))
+@
+\end{frame}
+
+
+\subsection{TCGA-BRCA Mutation}
+\begin{frame}[fragile]{Mutation data}
+<<eval=query, echo=F, results="markup">>=
+# 06/15/2018
+maf_mt2 <- GDCquery_Maf(tumor = "BRCA", 
+                        pipelines = "mutect2",
+                        save.csv = T, 
+                        directory = file.path(dir_data, "TCGA-BRCA"))
+save(maf_mt2,
+     file = file.path(dir_data, "tcga-brca_maf_mutect2.RData"))
+@
+
+<<eval=preprocess, echo=F, results='markup'>>=
+snv_mt2 <- maf_mt2 %>%
+  filter(Variant_Type == "SNP") %>%
+  transmute(gene = Hugo_Symbol, 
+            pid = substr(Tumor_Sample_Barcode, 1, 12),
+            chr = Chromosome, 
+            pos = Start_Position, 
+            type = Variant_Classification, 
+            HGVSc,
+            ref = Reference_Allele, 
+            alt1 = Tumor_Seq_Allele1, 
+            alt2 = Tumor_Seq_Allele2) 
+@
+\end{frame}
+
+\subsection{APOBEC Enrichment}
+\begin{frame}[fragile]{APOBEC Enrichment Scores}
+<<echo=F, eval=preprocess>>=
+get_apobec <- function(snv_caller){
+  dat <- snv_caller %>% mutate(mut = paste(ref, alt2, sep=">")) %>%
+    filter(mut %in% c("C>G", "C>T", "G>C", "G>A")) %>%
+    mutate(context = mapply(function(ch, p) as.character(chr24[[ch]][(p-20):(p+20)]), 
+                            ch = chr, p = pos),
+           motif = substr(context, 20, 22),
+           C_mut = 1,
+           C_con = str_count(context, "C|G"),
+           TCW_mut = ifelse(motif %in% c("TCA", "TCT", "AGA", "TGA"), 1, 0),
+           TCW_con = str_count(context, "(?=(TCA|TCT|AGA|TGA))"))
+  res <- dat %>% group_by(pid) %>%
+    summarize(n_C_mut = sum(C_mut),
+              n_C_con = sum(C_con),
+              n_TCW_mut = sum(TCW_mut),
+              n_TCW_con = sum(TCW_con)) %>%
+    filter(n_TCW_con != 0) %>%
+    as.data.frame() %>%
+    mutate(APOBEC = n_TCW_mut / n_C_mut * n_C_con / n_TCW_con)
+}
+es_mt2 <- get_apobec(snv_mt2)
+save(snv_mt2, es_mt2, 
+     file = file.path(dir_data, "tcga-brca_apobec-enrichment_mutect2.RData"))
+@
+\end{frame}
+
+
+\subsection{TCGA-BRCA Clinical - PAM50}
+<<eval=T, results='markup'>>=
+pam50 <- read.xlsx(file.path(dir_data, "13058_2016_724_MOESM2_ESM.xlsx"),
+                    sheet = 2) %>%
+  transmute(pid = substr(Sample.ID, 1, 12),
+            sample = substr(Sample.ID, 14, 15),
+            PAM50, ER.Status, PR.Status, Her2.Status) %>%
+  filter(sample == "01")
+# sum(duplicated(pam50$pid))
+@
+
+Netanely, Dvir, et al. "Expression and methylation patterns partition luminal-A breast tumors into distinct prognostic subgroups." \textit{Breast Cancer Research} 18.1 (2016): 74.
+\end{frame}
+
+
+\subsection{TCGA-BRCA Expression}
+\begin{frame}[fragile]{Expression data}
+<<eval=query, results="markup">>=
+# query (07/16/2018)
+query_rse <- GDCquery(project="TCGA-BRCA",
+                      data.category = "Transcriptome Profiling",
+                      data.type = "Gene Expression Quantification", 
+                      workflow.type = "HTSeq - Counts")
+GDCdownload(query = count_query, 
+            directory = dir_data)
+rse_raw <- GDCprepare(query = count_query, 
+                       directory = dir_data)
+save(query_rse, rse_raw,
+     file = file.path(dir_data, "tcga-brca_rse_raw.RData"))
+@
+
+<<eval=preprocess, results="markup">>=
+gdat_cnt <- assay(rse_brca)
+pdat <- colData(rse_brca)
+anno <- rowData(rse_brca)
+
+gdat_cnt_flt <- gdat_cnt[rowQuantiles(gdat_cnt, probs=2/3, na.rm=T)>0, ]
+norm_factors <- calcNormFactors(gdat_cnt_flt)
+lib_sizes <- colSums(gdat_cnt_flt) * norm_factors
+gdat <- voom(gdat_cnt_flt, 
+             lib.size = lib_sizes)$E
+
+rse_proc <- SummarizedExperiment(assays = gdat,
+                                 colData = pdat[colnames(gdat), ],
+                                 rowData = anno[rownames(gdat), ])
+
+save(rse_proc, file = file.path(dir_data, "tcga-brca_rse_proc.RData"))
+@
+\end{frame}
+
+
+\subsection{Immune Signatures}
+<<eval=preprocess, echo=F, results="asis">>=
+# read raw signature sets
+sigs_raw <- read.xlsx(file.path(dir_data, "Faruki et al 2017_Gene Sets and Checkpoints_AD.xlsx"),
+                      sheet = 1)
+
+# clean
+sigs <- as.list(sigs_raw) %>% 
+  lapply(Filter, f = Negate(is.na)) %>%
+  purrr::compact()
+
+sigs[["OX40L"]] <- "TNFSF4"
+sigs[["APOBEC3B"]] <- "APOBEC3B"
+
+# get a list of all genes
+anno <- as.data.frame(rowData(rse_proc))
+tab_sigs <- melt(sigs) %>%
+  set_names(nm = c("original", "group")) %>%
+  transmute(group,
+            original = as.character(original),
+            official = alias2SymbolTable(original, species = "Hs"))%>%
+  mutate(symbol = ifelse(is.na(official), original, official),
+         ens = with(anno, ensembl_gene_id[match(symbol, external_gene_name)]),
+         in_tcga = (symbol %in% anno$external_gene_name),
+         display = ifelse(in_tcga, symbol,
+                          paste("\\textcolor{red}{", symbol, "}") )) %>%
+  group_by(group) %>% 
+  filter(!duplicated(symbol)) %>% 
+  ungroup()
+
+save(tab_sigs,
+     file = file.path(dir_data, "signatures_immune.RData"))
+@
+
+\begin{frame}[fragile]{Immune Signatures - aliases}
+<<echo=F, results="asis">>=
+tab_alias <- tab_sigs %>% 
+  filter(original != official) %>%
+  arrange(group)
+
+print(xtable(tab_alias), scale = 0.6)
+@
+\end{frame}
+
+\begin{frame}[fragile]{Immune Signatures - genes by group}
+<<echo=F, results="asis">>=
+tab_group <- tab_sigs %>%
+  group_by(group) %>%
+  summarize(genes = paste(display, collapse = ", "))
+
+print(xtable(tab_group[1:17, ], align = "lp{0.8in}p{4in}"), 
+      scale = 0.8, 
+      sanitize.text.function = sanitize_text)
+@
+\end{frame}
+
+\begin{frame}[fragile]{Immune Signatures - genes by group}
+<<echo=F, results="asis">>=
+print(xtable(tab_group[18:35, ], align = "lp{0.8in}p{4in}"), 
+      scale = 0.8, 
+      sanitize.text.function = sanitize_text)
+@
+\end{frame}
+
+
+%\section{Analysis}
+<<eval=run, echo=F>>=
+rse <- rse_proc
+expr <- assay(rse)
+anno <- as.data.frame(rowData(rse))
+
+# filter duplicated samples
+sdat <- data.frame(bcd = colnames(rse), stringsAsFactors = F) %>%
+  mutate(pid = substr(bcd, 1, 12)) %>%
+  separate(bcd, remove = F,
+           into = c("TCGA", "TSS", "Patient", "sample", 
+                    "portion", "plate", "center")) %>%
+  filter(sample == "01A")
+ids_dup <- with(sdat, pid[duplicated(pid)])
+sdat <- filter(sdat, (!pid %in% ids_dup) | (pid %in% ids_dup & plate == "A277"))
+
+rownames(expr) <- anno$external_gene_name
+expr <- expr[, sdat$bcd] %>% as.data.frame()
+colnames(expr) <- sdat$pid
+# dim(expr)
+@
+
+<<eval=run, echo=F, eval=preprocess>>=
+expr_sigs <- tab_sigs %>%
+  dplyr::select(group, symbol) %>%
+  cbind(expr[.$symbol, ]) %>%
+  na.omit()
+# summarize expr data using mean values
+expr_sigs_avg <- expr_sigs %>%
+  melt(id.vars = c("group", "symbol"), 
+       variable.name = "pid") %>%
+  dcast(group ~ pid, mean) %>%
+  column_to_rownames(var = "group") %>%
+  t() %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "pid")
+@
+
+<<eval=run, echo=F, eval=preprocess>>=
+# summarize expr data using PC1
+get_pc1 <- function(mat){ # p x n
+  res <- prcomp(t(mat))
+  pc1 <- as.data.frame(t(res$x[, "PC1"]))
+  return(pc1)
+}
+expr_sigs_pc1 <- expr_sigs %>%
+  # filter(group %in% c("B.cells","T.cells")) %>%
+  group_by(group) %>%
+  group_modify(~ get_pc1(.[, -1])) %>%
+  column_to_rownames(var = "group") %>%
+  t() %>% 
+  as.data.frame() %>%
+  rownames_to_column(var = "pid")
+@
+
+
+<<eval=run, echo=F>>=
+combined_avg <- pam50 %>%
+  full_join(expr_sigs_avg, by = "pid") %>%
+  full_join(es_mt2, by = "pid")
+
+combined_pc1 <- pam50 %>%
+  full_join(expr_sigs_pc1, by = "pid") %>%
+  full_join(es_mt2, by = "pid")
+
+save(combined_avg, combined_pc1, tab_sigs,
+     file = file.path(dir_data, "tcga-brca_cleaned.RData"))
+@
+
+
+
+\section{Data pattern}
+<<echo=F, results='asis'>>=
+plot_var_by_type <- function(data, var){
+
+  data_plt <- data %>%
+    mutate(PAM50 = "All subtypes") %>%
+    rbind(data) %>%
+    drop_na_(var)
+  
+  N <- nrow(data_plt)/2
+  
+  ggplot(data_plt, aes_string(x = "PAM50", y = var))+
+    geom_point(position = position_jitter()) +
+    geom_boxplot(alpha = 0.5) +
+    # geom_violin(alpha = 0.3, draw_quantiles = c(0.25, 0.5, 0.75)) +
+    labs(x = "Subtypes",
+         y = paste0("log2 Normalized Expression of ", var), 
+         title = paste0("Total N = ", N),
+         size = 12)+
+    theme(axis.text = element_text(size=8),
+          axis.title = element_text(size=12, face="bold"),
+          plot.title = element_text(face="italic"))
+}
+@
+
+\subsection{APOBEC3B expression}
+\begin{frame}[fragile]{APOBEC3B expression - by subtype}
+<<Boxplot_by_Subtype_APOBEC3B, echo=F, results='asis'>>=
+plot_var_by_type(combined_avg, "APOBEC3B")
+@
+\end{frame}
+
+\subsection{APOBEC enrichment}
+\begin{frame}[fragile]{APOBEC scores - by subtype}
+<<Boxplot_by_Subtype_APOBEC, echo=F, results='asis'>>=
+# filter samples without mutation data
+cutoff_apobec <- 2
+plot_var_by_type(combined_avg, "APOBEC") + 
+  geom_hline(yintercept = 2, lty = 2) +
+  labs(y = "APOBEC Enrichment Scores")
+@
+
+Note: APOBEC score cutoff = 2, using the mutation annotation file from Mutect2.
+\end{frame}
+
+
+\section{Correlation (Mean-based)}
+<<echo=F, results='asis'>>=
+suffix <- "_Mean"
+combined <- combined_avg
+subtypes <- c("All-Patients", sort(unique(combined$PAM50)))
+groups <- setdiff(unique(tab_sigs$group), "APOBEC3B")
+@
+
+\subsection{Immune signature and APOBEC3B expression}
+<<echo=F, results='asis'>>=
+for(subtype in subtypes){
+  cor_dat <- combined %>%
+    mutate(PAM50 = "All-Patients") %>%
+    rbind(combined) %>%
+    filter(PAM50 == subtype) %>%
+    `[`(, c("APOBEC3B", groups)) %>%
+    na.omit()
+  # prepare corr table
+  cor_mat <- cor(cor_dat, method = "spearman")
+  cor_p <- cor_pmat(cor_dat, method = "spearman")
+  cor_tab <- merge(melt(cor_mat, value.name = "rho"),
+                   melt(cor_p, value.name = "pvalue")) %>% 
+    filter(Var1 == "APOBEC3B" & Var1 != Var2) %>%
+    dplyr::rename(Gene = Var1, Immune_Signature = Var2) %>%
+    arrange(pvalue)
+  # prepare corr plot
+  title <- paste0(subtype, ", N = ", nrow(cor_dat))
+  f <- paste0("./figure/Corr_Immune_APOBEC3B_", subtype, suffix, ".png")
+  ggcorrplot(cor_mat, title = title, lab_size = 3)
+  ggsave(f, width = 9.5, height = 9.5)
+  # output latex
+  cat("\\begin{frame}[fragile]{Correlation: ", subtype, "}\n")
+    cat("\\begin{minipage}{0.4\\textwidth}")
+      printab(cor_tab, scale = 0.65)
+    cat("\\end{minipage}\n")
+    cat("\\begin{minipage}{0.5\\textwidth}\n")
+      cat("\\includegraphics[scale = 0.3]{", f, "}\n\n", sep="")
+    cat("\\end{minipage}\n\n")
+  cat("\\end{frame}\n\n")
+}
+@
+
+
+\subsection{Immune signature and APOBEC enrichment (continuous)}
+<<echo=F, results='asis'>>=
+for(subtype in subtypes){
+  cor_dat <- combined %>%
+    mutate(PAM50 = "All-Patients") %>%
+    rbind(combined) %>%
+    filter(PAM50 == subtype) %>%
+    `[`(, c("APOBEC", groups)) %>%
+    na.omit()
+  # prepare corr table
+  cor_mat <- cor(cor_dat, method = "spearman")
+  cor_p <- cor_pmat(cor_dat, method = "spearman")
+  cor_tab <- merge(melt(cor_mat, value.name = "rho"),
+                   melt(cor_p, value.name = "pvalue")) %>% 
+    mutate(Var1 = gsub(suffix, "", Var1),
+           Var2 = gsub(suffix, "", Var2)) %>%
+    filter(Var1 == "APOBEC" & Var1 != Var2) %>%
+    dplyr::rename(Score = Var1, Immune_Signature = Var2) %>%
+    arrange(pvalue)
+  # prepare corr plot
+  title <- paste0(subtype, ", N = ", nrow(cor_dat))
+  f <- paste0("./figure/Corr_Immune_APOBEC_", subtype, suffix, ".png")
+  ggcorrplot(cor_mat, title = title)
+  ggsave(f, width = 9.5, height = 9.5)
+  # output latex
+  cat("\\begin{frame}[fragile]{Correlation: ", subtype, "}\n")
+    cat("\\begin{minipage}{0.4\\textwidth}")
+      printab(cor_tab, scale = 0.65)
+    cat("\\end{minipage}\n")
+    cat("\\begin{minipage}{0.5\\textwidth}\n")
+      cat("\\includegraphics[scale = 0.3]{", f, "}\n\n", sep="")
+    cat("\\end{minipage}\n\n")
+  cat("\\end{frame}\n\n")
+}
+@
+
+\subsection{Immune signature and APOBEC enrichment (high/low)}
+<<echo=F, results='asis'>>=
+tmp <- combined[, c("pid", "PAM50", "APOBEC", groups)] %>%
+  column_to_rownames(var = "pid") %>%
+  na.omit() 
+scaled <- scale_rows(t(tmp[, groups])) 
+
+for(subtype in subtypes){
+  
+  tmp1 <- tmp
+  if(subtype != "All-Patients"){
+    tmp1 <- tmp[tmp$PAM50 == subtype, ]
+  }
+  pids_low <- with(tmp1, rownames(tmp1)[APOBEC <= cutoff_apobec])
+  pids_high <- with(tmp1, rownames(tmp1)[APOBEC > cutoff_apobec])
+  
+  expr_low <- scaled[, pids_low]
+  expr_high <- scaled[, pids_high]
+
+  # set color 
+  x = as.matrix(scaled)
+  q1 = quantile(x, 0.01)
+  q2 = quantile(x, 0.99)
+  fun_col <- colorRamp2(seq(q1,q2, length = 3), c("blue", "#EEEEEE", "red"))
+  
+  ht_low <- Heatmap(expr_low, col = fun_col,
+                    # row_dend_reorder = F,
+                    # column_dend_reorder = F,
+                  show_row_dend = F,
+                  show_column_names = F,
+                  show_row_names = F,
+                  column_title = "APOBEC-Low",
+                  show_heatmap_legend = F)
+  ht_high <- Heatmap(expr_high, col = fun_col,
+                     # row_dend_reorder = F,
+                     # column_dend_reorder = F,
+                   show_row_dend = F,
+                   show_column_names = F,
+                   column_title = "APOBEC-High",
+                   name = "Expression")
+  f <- paste0("./figure/Heatmap_Immune_APOBEC_", subtype, suffix, ".png")
+  png(f)
+  draw(ht_low + ht_high)
+  dev.off()
+
+  cat("\\begin{frame}[fragile]{Heatmap by APOBEC level: ", subtype, "}\n\n")
+  cat("\\begin{center}\n\n")
+  cat("\\includegraphics[height=.85\\textheight]{", f, "}\n\n", sep="")
+  cat("\\end{center}\n\n")
+  cat("\\end{frame}\n\n")
+}
+@
+
+
+\section{Correlation (PC1-based)}
+<<echo=F, results='asis'>>=
+suffix <- "_PC1"
+combined <- combined_pc1
+subtypes <- c("All-Patients", sort(unique(combined$PAM50)))
+groups <- setdiff(unique(tab_sigs$group), "APOBEC3B")
+@
+
+\subsection{Immune signature and APOBEC3B expression}
+<<echo=F, results='asis'>>=
+for(subtype in subtypes){
+  cor_dat <- combined %>%
+    mutate(PAM50 = "All-Patients") %>%
+    rbind(combined) %>%
+    filter(PAM50 == subtype) %>%
+    `[`(, c("APOBEC3B", groups)) %>%
+    na.omit()
+  # prepare corr table
+  cor_mat <- cor(cor_dat, method = "spearman")
+  cor_p <- cor_pmat(cor_dat, method = "spearman")
+  cor_tab <- merge(melt(cor_mat, value.name = "rho"),
+                   melt(cor_p, value.name = "pvalue")) %>% 
+    filter(Var1 == "APOBEC3B" & Var1 != Var2) %>%
+    dplyr::rename(Gene = Var1, Immune_Signature = Var2) %>%
+    arrange(pvalue)
+  # prepare corr plot
+  title <- paste0(subtype, ", N = ", nrow(cor_dat))
+  f <- paste0("./figure/Corr_Immune_APOBEC3B_", subtype, suffix, ".png")
+  ggcorrplot(cor_mat, title = title, lab_size = 3)
+  ggsave(f, width = 9.5, height = 9.5)
+  # output latex
+  cat("\\begin{frame}[fragile]{Correlation: ", subtype, "}\n")
+    cat("\\begin{minipage}{0.4\\textwidth}")
+      printab(cor_tab, scale = 0.65)
+    cat("\\end{minipage}\n")
+    cat("\\begin{minipage}{0.5\\textwidth}\n")
+      cat("\\includegraphics[scale = 0.3]{", f, "}\n\n", sep="")
+    cat("\\end{minipage}\n\n")
+  cat("\\end{frame}\n\n")
+}
+@
+
+
+\subsection{Immune signature and APOBEC enrichment (continuous)}
+<<echo=F, results='asis'>>=
+for(subtype in subtypes){
+  cor_dat <- combined %>%
+    mutate(PAM50 = "All-Patients") %>%
+    rbind(combined) %>%
+    filter(PAM50 == subtype) %>%
+    `[`(, c("APOBEC", groups)) %>%
+    na.omit()
+  # prepare corr table
+  cor_mat <- cor(cor_dat, method = "spearman")
+  cor_p <- cor_pmat(cor_dat, method = "spearman")
+  cor_tab <- merge(melt(cor_mat, value.name = "rho"),
+                   melt(cor_p, value.name = "pvalue")) %>% 
+    mutate(Var1 = gsub(suffix, "", Var1),
+           Var2 = gsub(suffix, "", Var2)) %>%
+    filter(Var1 == "APOBEC" & Var1 != Var2) %>%
+    dplyr::rename(Score = Var1, Immune_Signature = Var2) %>%
+    arrange(pvalue)
+  # prepare corr plot
+  title <- paste0(subtype, ", N = ", nrow(cor_dat))
+  f <- paste0("./figure/Corr_Immune_APOBEC_", subtype, suffix, ".png")
+  ggcorrplot(cor_mat, title = title)
+  ggsave(f, width = 9.5, height = 9.5)
+  # output latex
+  cat("\\begin{frame}[fragile]{Correlation: ", subtype, "}\n")
+    cat("\\begin{minipage}{0.4\\textwidth}")
+      printab(cor_tab, scale = 0.65)
+    cat("\\end{minipage}\n")
+    cat("\\begin{minipage}{0.5\\textwidth}\n")
+      cat("\\includegraphics[scale = 0.3]{", f, "}\n\n", sep="")
+    cat("\\end{minipage}\n\n")
+  cat("\\end{frame}\n\n")
+}
+@
+
+\subsection{Immune signature and APOBEC enrichment (high/low)}
+<<echo=F, results='asis'>>=
+tmp <- combined[, c("pid", "PAM50", "APOBEC", groups)] %>%
+  column_to_rownames(var = "pid") %>%
+  na.omit() 
+scaled <- scale_rows(t(tmp[, groups])) 
+
+for(subtype in subtypes){
+  
+  tmp1 <- tmp
+  if(subtype != "All-Patients"){
+    tmp1 <- tmp[tmp$PAM50 == subtype, ]
+  }
+  pids_low <- with(tmp1, rownames(tmp1)[APOBEC <= cutoff_apobec])
+  pids_high <- with(tmp1, rownames(tmp1)[APOBEC > cutoff_apobec])
+  
+  expr_low <- scaled[, pids_low]
+  expr_high <- scaled[, pids_high]
+
+  # set color 
+  x = as.matrix(scaled)
+  q1 = quantile(x, 0.01)
+  q2 = quantile(x, 0.99)
+  fun_col <- colorRamp2(seq(q1,q2, length = 3), c("blue", "#EEEEEE", "red"))
+  
+  ht_low <- Heatmap(expr_low, col = fun_col,
+                    # row_dend_reorder = F,
+                    # column_dend_reorder = F,
+                  show_row_dend = F,
+                  show_column_names = F,
+                  show_row_names = F,
+                  column_title = "APOBEC-Low",
+                  show_heatmap_legend = F)
+  ht_high <- Heatmap(expr_high, col = fun_col,
+                     # row_dend_reorder = F,
+                     # column_dend_reorder = F,
+                   show_row_dend = F,
+                   show_column_names = F,
+                   column_title = "APOBEC-High",
+                   name = "Expression")
+  f <- paste0("./figure/Heatmap_Immune_APOBEC_", subtype, suffix, ".png")
+  png(f)
+  draw(ht_low + ht_high)
+  dev.off()
+
+  cat("\\begin{frame}[fragile]{Heatmap by APOBEC level: ", subtype, "}\n\n")
+  cat("\\begin{center}\n\n")
+  cat("\\includegraphics[height=.85\\textheight]{", f, "}\n\n", sep="")
+  cat("\\end{center}\n\n")
+  cat("\\end{frame}\n\n")
+}
+@
+
+%last slide
+\section{Session Information}
+\begin{frame}[fragile]
+<<echo=FALSE,results='asis'>>=
+toLatex(sessionInfo(), locale=FALSE)
+print(paste("Start Time:  ",stdt))
+print(paste("End Time:  ",date()))
+@ 
+\end{frame}
+
+\end{document} 
