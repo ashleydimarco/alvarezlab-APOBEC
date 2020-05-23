@@ -115,20 +115,12 @@ library(edgeR)
 library(limma)
 library(SummarizedExperiment)
 library(ggcorrplot)
-library(ComplexHeatmap)
+library(ComplexHeatmap, lib = "/home.local/xq24/R/tmp_lib")
 library(circlize)
 library(MASS)
-root <- "/data1/workspace/DCI/Force"
-root <- "~/Desktop/Alvarez"
+
+root <- "/data1/workspace/DCI/Force/Immune_Signature"
 dir_data <- file.path(root, "Data")
-# 
-# load(file.path(dir_data, "BRCA_Expression.RData"))
-# load(file.path(dir_data, "BRCA_MAF.RData"))
-# load(file.path(root, "APOBEC/Data/BRCA_Clinical.RData")) # clinical data
-# load(file.path(root, "APOBEC/Data/BRCA_MAF.RData"))  # mutation data
-# load(file.path(root, "Data/cleaned.RData"))   # expression data
-# load(file.path(root, "tmp.RData"))
-# load(file.path(root, "Immune_Signature/Results/DiMarco-APOBEC-Immune-Signature-Data.RData"))
 @ 
 \end{frame}
 
@@ -176,7 +168,7 @@ save(chr24,
 
 \subsection{TCGA-BRCA Mutation}
 \begin{frame}[fragile]{Mutation data}
-<<eval=query, echo=F, results="markup">>=
+<<eval=query, results="markup">>=
 # 06/15/2018
 maf_mt2 <- GDCquery_Maf(tumor = "BRCA", 
                         pipelines = "mutect2",
@@ -186,7 +178,7 @@ save(maf_mt2,
      file = file.path(dir_data, "tcga-brca_maf_mutect2.RData"))
 @
 
-<<eval=preprocess, echo=F, results='markup'>>=
+<<eval=preprocess, results='markup'>>=
 snv_mt2 <- maf_mt2 %>%
   filter(Variant_Type == "SNP") %>%
   transmute(gene = Hugo_Symbol, 
@@ -201,9 +193,9 @@ snv_mt2 <- maf_mt2 %>%
 @
 \end{frame}
 
-\subsection{APOBEC Enrichment}
+\subsection{TCGA-BRCA Mutation - APOBEC Enrichment}
 \begin{frame}[fragile]{APOBEC Enrichment Scores}
-<<echo=F, eval=preprocess>>=
+<<eval=preprocess>>=
 get_apobec <- function(snv_caller){
   dat <- snv_caller %>% mutate(mut = paste(ref, alt2, sep=">")) %>%
     filter(mut %in% c("C>G", "C>T", "G>C", "G>A")) %>%
@@ -231,6 +223,7 @@ save(snv_mt2, es_mt2,
 
 
 \subsection{TCGA-BRCA Clinical - PAM50}
+\begin{frame}[fragile]{PAM50 Subtypes}
 <<eval=T, results='markup'>>=
 pam50 <- read.xlsx(file.path(dir_data, "13058_2016_724_MOESM2_ESM.xlsx"),
                     sheet = 2) %>%
@@ -321,7 +314,8 @@ tab_alias <- tab_sigs %>%
   filter(original != official) %>%
   arrange(group)
 
-print(xtable(tab_alias), scale = 0.6)
+print(xtable(tab_alias), scale = 0.6, 
+      sanitize.text.function = sanitize_text)
 @
 \end{frame}
 
@@ -363,17 +357,18 @@ ids_dup <- with(sdat, pid[duplicated(pid)])
 sdat <- filter(sdat, (!pid %in% ids_dup) | (pid %in% ids_dup & plate == "A277"))
 
 rownames(expr) <- anno$external_gene_name
-expr <- expr[, sdat$bcd] %>% as.data.frame()
+expr <- expr[, sdat$bcd] %>% as.data.frame() #!
 colnames(expr) <- sdat$pid
 # dim(expr)
 @
 
-<<eval=run, echo=F, eval=preprocess>>=
+<<eval=run, echo=F>>=
 expr_sigs <- tab_sigs %>%
   dplyr::select(group, symbol) %>%
   cbind(expr[.$symbol, ]) %>%
   na.omit()
-# summarize expr data using mean values
+
+## summarize expr data using mean values
 expr_sigs_avg <- expr_sigs %>%
   melt(id.vars = c("group", "symbol"), 
        variable.name = "pid") %>%
@@ -382,27 +377,22 @@ expr_sigs_avg <- expr_sigs %>%
   t() %>%
   as.data.frame() %>%
   rownames_to_column(var = "pid")
-@
 
-<<eval=run, echo=F, eval=preprocess>>=
-# summarize expr data using PC1
+## summarize expr data using PC1
 get_pc1 <- function(mat){ # p x n
   res <- prcomp(t(mat))
   pc1 <- as.data.frame(t(res$x[, "PC1"]))
   return(pc1)
 }
 expr_sigs_pc1 <- expr_sigs %>%
-  # filter(group %in% c("B.cells","T.cells")) %>%
   group_by(group) %>%
   group_modify(~ get_pc1(.[, -1])) %>%
   column_to_rownames(var = "group") %>%
   t() %>% 
   as.data.frame() %>%
   rownames_to_column(var = "pid")
-@
 
-
-<<eval=run, echo=F>>=
+## clean
 combined_avg <- pam50 %>%
   full_join(expr_sigs_avg, by = "pid") %>%
   full_join(es_mt2, by = "pid")
@@ -468,7 +458,7 @@ Note: APOBEC score cutoff = 2, using the mutation annotation file from Mutect2.
 suffix <- "_Mean"
 combined <- combined_avg
 subtypes <- c("All-Patients", sort(unique(combined$PAM50)))
-groups <- setdiff(unique(tab_sigs$group), "APOBEC3B")
+groups <- sort(setdiff(unique(tab_sigs$group), "APOBEC3B")) #!
 @
 
 \subsection{Immune signature and APOBEC3B expression}
@@ -478,7 +468,7 @@ for(subtype in subtypes){
     mutate(PAM50 = "All-Patients") %>%
     rbind(combined) %>%
     filter(PAM50 == subtype) %>%
-    `[`(, c("APOBEC3B", groups)) %>%
+    `[`(, c(groups, "APOBEC3B")) %>%
     na.omit()
   # prepare corr table
   cor_mat <- cor(cor_dat, method = "spearman")
@@ -491,7 +481,7 @@ for(subtype in subtypes){
   # prepare corr plot
   title <- paste0(subtype, ", N = ", nrow(cor_dat))
   f <- paste0("./figure/Corr_Immune_APOBEC3B_", subtype, suffix, ".png")
-  ggcorrplot(cor_mat, title = title, lab_size = 3)
+  ggcorrplot(cor_mat, title = title)
   ggsave(f, width = 9.5, height = 9.5)
   # output latex
   cat("\\begin{frame}[fragile]{Correlation: ", subtype, "}\n")
@@ -513,7 +503,7 @@ for(subtype in subtypes){
     mutate(PAM50 = "All-Patients") %>%
     rbind(combined) %>%
     filter(PAM50 == subtype) %>%
-    `[`(, c("APOBEC", groups)) %>%
+    `[`(, c(groups, "APOBEC")) %>%
     na.omit()
   # prepare corr table
   cor_mat <- cor(cor_dat, method = "spearman")
@@ -545,18 +535,20 @@ for(subtype in subtypes){
 \subsection{Immune signature and APOBEC enrichment (high/low)}
 <<echo=F, results='asis'>>=
 tmp <- combined[, c("pid", "PAM50", "APOBEC", groups)] %>%
-  column_to_rownames(var = "pid") %>%
-  na.omit() 
+  filter_at(vars(-PAM50), all_vars(!is.na(.))) %>% #! 
+  column_to_rownames(var = "pid") 
 scaled <- scale_rows(t(tmp[, groups])) 
 
 for(subtype in subtypes){
   
-  tmp1 <- tmp
+  tmp1 <- tmp %>%
+    rownames_to_column(var = "pid")
   if(subtype != "All-Patients"){
-    tmp1 <- tmp[tmp$PAM50 == subtype, ]
+    tmp1 <- tmp1 %>%
+      filter(PAM50 == subtype)
   }
-  pids_low <- with(tmp1, rownames(tmp1)[APOBEC <= cutoff_apobec])
-  pids_high <- with(tmp1, rownames(tmp1)[APOBEC > cutoff_apobec])
+  pids_low <- with(tmp1, pid[APOBEC <= cutoff_apobec])
+  pids_high <- with(tmp1, pid[APOBEC > cutoff_apobec])
   
   expr_low <- scaled[, pids_low]
   expr_high <- scaled[, pids_high]
@@ -568,16 +560,12 @@ for(subtype in subtypes){
   fun_col <- colorRamp2(seq(q1,q2, length = 3), c("blue", "#EEEEEE", "red"))
   
   ht_low <- Heatmap(expr_low, col = fun_col,
-                    # row_dend_reorder = F,
-                    # column_dend_reorder = F,
                   show_row_dend = F,
                   show_column_names = F,
                   show_row_names = F,
                   column_title = "APOBEC-Low",
                   show_heatmap_legend = F)
   ht_high <- Heatmap(expr_high, col = fun_col,
-                     # row_dend_reorder = F,
-                     # column_dend_reorder = F,
                    show_row_dend = F,
                    show_column_names = F,
                    column_title = "APOBEC-High",
@@ -601,7 +589,7 @@ for(subtype in subtypes){
 suffix <- "_PC1"
 combined <- combined_pc1
 subtypes <- c("All-Patients", sort(unique(combined$PAM50)))
-groups <- setdiff(unique(tab_sigs$group), "APOBEC3B")
+groups <- (setdiff(unique(tab_sigs$group), "APOBEC3B")) #! unsorted
 @
 
 \subsection{Immune signature and APOBEC3B expression}
@@ -611,7 +599,7 @@ for(subtype in subtypes){
     mutate(PAM50 = "All-Patients") %>%
     rbind(combined) %>%
     filter(PAM50 == subtype) %>%
-    `[`(, c("APOBEC3B", groups)) %>%
+    `[`(, c(groups, "APOBEC3B")) %>%
     na.omit()
   # prepare corr table
   cor_mat <- cor(cor_dat, method = "spearman")
@@ -646,7 +634,7 @@ for(subtype in subtypes){
     mutate(PAM50 = "All-Patients") %>%
     rbind(combined) %>%
     filter(PAM50 == subtype) %>%
-    `[`(, c("APOBEC", groups)) %>%
+    `[`(, c(groups, "APOBEC")) %>%
     na.omit()
   # prepare corr table
   cor_mat <- cor(cor_dat, method = "spearman")
@@ -678,18 +666,20 @@ for(subtype in subtypes){
 \subsection{Immune signature and APOBEC enrichment (high/low)}
 <<echo=F, results='asis'>>=
 tmp <- combined[, c("pid", "PAM50", "APOBEC", groups)] %>%
-  column_to_rownames(var = "pid") %>%
-  na.omit() 
+  filter_at(vars(-PAM50), all_vars(!is.na(.))) %>% #! 
+  column_to_rownames(var = "pid") 
 scaled <- scale_rows(t(tmp[, groups])) 
 
 for(subtype in subtypes){
   
-  tmp1 <- tmp
+  tmp1 <- tmp %>%
+    rownames_to_column(var = "pid")
   if(subtype != "All-Patients"){
-    tmp1 <- tmp[tmp$PAM50 == subtype, ]
+    tmp1 <- tmp1 %>%
+      filter(PAM50 == subtype)
   }
-  pids_low <- with(tmp1, rownames(tmp1)[APOBEC <= cutoff_apobec])
-  pids_high <- with(tmp1, rownames(tmp1)[APOBEC > cutoff_apobec])
+  pids_low <- with(tmp1, pid[APOBEC <= cutoff_apobec])
+  pids_high <- with(tmp1, pid[APOBEC > cutoff_apobec])
   
   expr_low <- scaled[, pids_low]
   expr_high <- scaled[, pids_high]
@@ -701,16 +691,12 @@ for(subtype in subtypes){
   fun_col <- colorRamp2(seq(q1,q2, length = 3), c("blue", "#EEEEEE", "red"))
   
   ht_low <- Heatmap(expr_low, col = fun_col,
-                    # row_dend_reorder = F,
-                    # column_dend_reorder = F,
                   show_row_dend = F,
                   show_column_names = F,
                   show_row_names = F,
                   column_title = "APOBEC-Low",
                   show_heatmap_legend = F)
   ht_high <- Heatmap(expr_high, col = fun_col,
-                     # row_dend_reorder = F,
-                     # column_dend_reorder = F,
                    show_row_dend = F,
                    show_column_names = F,
                    column_title = "APOBEC-High",
