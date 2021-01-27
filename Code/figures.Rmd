@@ -1,0 +1,369 @@
+---
+title: "Figures"
+output:
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=F, eval=T}
+set.seed(1234)
+stdt <- date()
+knitr::opts_chunk$set(echo = F,
+                      warning = F,
+                      message = F,
+                      dpi = 300,
+                      fig.pos = 'H')
+
+library(knitr)
+library(tidyverse)
+library(ggcorrplot)
+library(circlize)
+library(ComplexHeatmap)
+library(openxlsx)
+library(ggsignif)
+
+root <- "/mnt/data0/workspace/Alvarez/Ashley-DiMarco/Immune_Signature"
+load(file.path(root, "Data/tcga-brca_cleaned.RData"))
+
+cells <- c("B cells", "T cells", "T helper cells", "Tcm", "Tem",
+           "Th1 cells", "Th2 cells", "TFH", "Th17 cells", "TReg",
+           "CD8 T cells", "Tgd", "Cytotoxic cells", "NK cells",
+           "NK CD56dim cells", "NK CD56bright cells", "DC", "iDC",
+           "aDC", "pDC", "Eosinophils", "Macrophages", "Mast cells",
+           "Neutrophils", "IFN", "MHCII",  "PD1", "PDL1", "PDL2",
+           "CTLA4", "B7-H4", "TIM-3", "LAG3", "OX40", "OX40L")
+cells1 <- gsub(" ", ".", cells)
+
+dat0 <- combined_pc1 %>%
+  filter_at(vars(one_of(cells1)), negate(is.na)) %>%
+  filter(PAM50 %in% c("Basal", "Her2", "LumA", "LumB") & 
+        (!is.na(APOBEC))) %>%
+  mutate(Sample_ID = paste0(pid, "-", sample)) 
+```
+
+### Figure 6-A
+<!-- Does 'All' contain normal? -->
+```{r fig.height=2.45, fig.width=3.5}
+dat <- dat0 %>%
+  mutate(PAM50 = "All") %>%
+  rbind(dat0) %>%
+  transmute(PAM50 = factor(PAM50, 
+                           levels = c("All", "Basal", "Her2", "LumA", "LumB"),
+                           labels = c("All", "Basal-like", "HER2", "Luminal A", "Luminal B")), 
+            APOBEC) 
+
+ggplot(dat, aes(x = PAM50, y = APOBEC))+
+  geom_point(position = position_jitter(),
+             size = 0.2, stroke = 0.2) +
+  geom_boxplot(alpha = 0.2, outlier.shape = NA, fatten = 1) +
+  labs(x = "", y = "APOBEC Enrichment Score") +
+  theme_classic() +
+  theme(text = element_text(size = unit(8, "points")))
+```
+
+### Figure 6-C
+```{r, echo=F}
+get_cor <- function(x){
+  cor_mat <- cor(x, method = "spearman")
+
+  d1 <- data.frame(rho = cor_mat[, "APOBEC"])
+
+  cor_p <- cor_pmat(x, method = "spearman")
+
+  d2 <- data.frame(pvalue = cor_p[, "APOBEC"])
+
+  cor_tab <- merge(d1, d2, by = 0) %>%
+    dplyr::rename(sig = Row.names) %>%
+    filter(sig != "APOBEC") %>%
+    mutate(adjusted_pvalue = p.adjust(pvalue, method = "BH")) %>%
+    arrange(pvalue)
+  return(cor_tab)
+}
+format.p <- function(p, eps = 0.001, cutoff = 0.05){
+  if(is.na(p) | p >= cutoff){
+    anno <- ""
+  } else if(p < eps){
+    anno <- paste0("p < " , eps)
+  } else if(p < cutoff){
+    anno <- paste0("p = ", sprintf('%.3f', p))
+  } else {
+    anno <- paste0("p = ", sprintf('%.3f', p))
+  }
+  return(anno)
+}
+
+gp_p <- gpar(fontsize = unit(6, "points"))
+gp <- gpar(fontsize = unit(8, "points"))
+
+dat <- dat0 %>%
+  dplyr::select(PAM50, APOBEC, !!cells1) %>%
+  mutate(PAM50 = factor(PAM50,
+                        levels = c("Basal", "Her2", "LumA", "LumB"),
+                        labels = c("Basal-like", "HER2-enriched",
+                                   "Luminal A", "Luminal B"))) %>%
+  group_by(PAM50) %>%
+  group_modify(~ get_cor(.x)) %>%
+  mutate(sig = gsub("\\.", " ", sig))
+
+tab3 <- dat
+
+mat_rho <- dat %>%
+  pivot_wider(id_cols = "sig",
+              names_from = "PAM50",
+              values_from = "rho") %>%
+  column_to_rownames(var = "sig") %>%
+  as.matrix()
+
+mat_adjp <- dat %>%
+  pivot_wider(id_cols = "sig",
+              names_from = "PAM50",
+              values_from = "pvalue") %>%
+  column_to_rownames(var = "sig") %>%
+  as.matrix()
+```
+
+<!-- Top 10 signatures -->
+```{r fig.height=3.3, fig.width=3.7}
+top10 <- dat %>%
+  filter(PAM50 == "Basal-like") %>%
+  arrange(pvalue) %>%
+  head(10) %>%
+  pull(sig)
+
+q1 = quantile(mat_rho[top10, ], 0.01)
+q2 = quantile(mat_rho[top10, ], 0.99)
+
+hm <- Heatmap(mat_rho[top10, ],
+        # name = "rho",
+        col = colorRamp2(seq(q1, q2, length = 3),
+                         c("#354576", "#EEEEEE", "#C83934")),
+        
+        heatmap_legend_param = list(title = "rho",
+                                    title_gp = gp,
+                                    at = c(-0.4, 0, 0.4),
+                                    labels_gp = gp,
+                                    border = NA,
+                                    legend_height = unit(1, "in")),
+        
+        column_title = "Correlations of APOBEC Enrichment\nand Immune Signatures",
+        column_names_rot = 45,
+        column_names_gp = gp,
+        column_title_gp = gp,
+        cluster_rows = F,
+        cluster_columns = F,
+        
+        row_names_gp = gp,
+
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          if(mat_adjp[i,j] < 0.05){
+            grid.text(format.p(mat_adjp[i, j], cutoff = 1),
+                      x = x + unit(5, "points"),
+                      y = y - unit(3, "points"), gp = gp_p)
+            }
+        },
+        width = unit(0.5*4, "in"),
+        height = unit(0.2*10, "in")
+        
+        )
+
+draw(hm, heatmap_legend_side = "left")
+```
+
+<!-- All signatures -->
+```{r fig.height=7, fig.width=4}
+q1 = quantile(mat_rho, 0.01)
+q2 = quantile(mat_rho, 0.99)
+
+hm <- Heatmap(mat_rho,
+        col = colorRamp2(seq(q1, q2, length = 3),
+                         c("#354576", "#EEEEEE", "#C83934")),
+        
+        heatmap_legend_param = list(title = "rho",
+                                    title_gp = gp,
+                                    # at = c(-0.4, 0, 0.4),
+                                    labels_gp = gp,
+                                    border = NA,
+                                    legend_height = unit(1, "in")),
+        
+        column_title = "Correlations of APOBEC Enrichment\nand Immune Signatures",
+        column_names_rot = 45,
+        column_names_gp = gp,
+        column_title_gp = gp,
+        cluster_rows = F,
+        cluster_columns = F,
+        
+        row_names_gp = gp,
+
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          if(mat_adjp[i,j] < 0.05){
+            grid.text(format.p(mat_adjp[i, j], cutoff = 1),
+                      x = x + unit(5, "points"),
+                      y = y, gp = gp_p)
+            }
+          },
+        width = unit(0.5*4, "in"),
+        height = unit(0.15*35, "in")
+
+        )
+
+draw(hm, heatmap_legend_side = "left")
+```
+
+
+### Figure 6-D
+```{r fig.height=2.7, fig.width=4.8}
+cl_high <- file.path(root, "Data/clusters_apobec-high.txt") %>%
+  read.table(header = F, col.names = c("Sample_ID", "cluster")) %>%
+  mutate(cluster_name = case_when(cluster == 1 ~ "APOBEC-high HER2-2",
+                           cluster == 2 ~ "APOBEC-high HER2-1",
+                           cluster == 3 ~ "APOBEC-high Basal-2",
+                           cluster == 4 ~ "APOBEC-high Basal-1"))
+cl_low <- file.path(root, "Data/clusters_apobec-low.txt") %>%
+  read.table(header = F, 
+             col.names = c("Sample_ID", "cluster")) %>%
+  mutate(cluster_name = case_when(cluster == 1 ~ "APOBEC-low Basal-2",
+                           cluster == 2 ~ "APOBEC-low Basal-1",
+                           cluster == 3 ~ "APOBEC-low HER2-2",
+                           cluster == 4 ~ "APOBEC-low HER2-1"))
+  
+cl <- rbind(cl_high, cl_low)
+
+dat <- read.xlsx(file.path(root, "Data/pgen.1007669.s008.xlsx")) %>%
+  transmute(Sample_ID = sample_name, 
+            subclonal = number.of.subclonal.mutations) %>%
+  left_join(cl, .) %>%
+  left_join(dat0) %>%
+  mutate(group = gsub("HER2-|Basal-", "Cluster ", cluster_name),
+         PAM50 = factor(PAM50, levels = c("Basal", "Her2"),
+                        labels = c("Basal-like", "HER2-enriched")))
+
+colors_group = c("APOBEC-high Cluster 1" = "#BF3633",
+           "APOBEC-high Cluster 2" = "#4974A1",
+           "APOBEC-low Cluster 1" = "#E6B1A9",
+           "APOBEC-low Cluster 2" = "#B4C7D5")
+ggplot(dat, aes(x = PAM50, y = log(subclonal), color = group)) +
+  geom_point(size = 0.5, 
+             position = position_jitterdodge(jitter.width = 0.1,
+                                             dodge.width = 0.8)) +
+  geom_boxplot(fill = NA, width = 0.6, outlier.shape = NA, fatten = 1,
+               position = position_dodge(width = 0.8)) +
+  geom_signif(y_position=6.8, xmin=1.6, xmax=2,
+              annotation=c("*"), tip_length=0, color = "black") +
+  scale_y_continuous(limits = c(0, 7)) +
+  scale_color_manual(values = colors_group) +
+  labs(color = "", x = "",
+       y = "log(Number of Subclonal Mutations)") +
+  theme_classic() +
+  theme(text = element_text(size = unit(8, "points")))
+```
+
+### Supp Figure 9-B
+```{r fig.height=2.7, fig.width=4.8}
+ggplot(dat, aes(x = group, y = APOBEC, color = PAM50)) +
+  geom_point(size = 0.5,
+             position = position_jitterdodge(jitter.width = 0.5,
+                                             dodge.width = 1)) +
+  geom_boxplot(fill = NA, outlier.shape = NA, fatten = 1,
+               position = position_dodge(width = 1)) +
+  geom_signif(y_position=4.5, xmin=1.2, xmax=2.3,
+              annotation=c("ns"), tip_length=0, color = "black") +
+  scale_y_continuous(limits = c(0, 5)) +
+  labs(x = "",
+       y = "APOBEC Enrichment Score",
+       color = "PAM50 Subtype") +
+  theme_classic() +
+  theme(text = element_text(size = unit(8, "points")),
+        axis.text.x = element_text(angle = 45, hjust=1))
+```
+
+<!-- Supp Table 1 -->
+```{r include=FALSE}
+library(xlsx)
+dims <- tab_sigs %>%
+  filter(original != "APOBEC3B") %>%
+  group_by(group) %>%
+  summarize(n = length(original))
+groups <- dims$group
+m <- matrix("", nrow = max(dims$n), ncol = nrow(dims))
+colnames(m) <- groups
+for(g in groups){
+  genes <- tab_sigs %>%
+    filter(group == g) %>%
+    pull(original)
+  m[1:length(genes), g] <- genes
+}
+
+sheetname <- "Gene lists"
+xfile <- file.path(root, "Data/Supp_T1_gene_lists_labelled.xlsx")
+write.xlsx(m, 
+           file = xfile, 
+           sheetName = sheetname,
+           row.names = F)
+wb <- loadWorkbook(xfile)     
+cs <- CellStyle(wb, font = Font(wb, color = "red"))     
+sheets <- getSheets(wb)            
+sheet <- sheets[[sheetname]] 
+rows <- getRows(sheet, rowIndex=2:(nrow(m)+1))     
+cells <- getCells(rows, colIndex = 1:ncol(m))        
+values <- lapply(cells, getCellValue)
+highlighted <- NULL
+for (i in names(values)) {
+  x <- values[[i]]
+  in_tcga <- tab_sigs %>%
+    filter(original == x) %>%
+    pull(in_tcga) %>%
+    head(1)
+  if(length(in_tcga) != 0){
+    if(!in_tcga) {
+      highlighted <- c(highlighted, i)
+    }
+  }
+}
+
+lapply(names(cells[highlighted]),
+       function(ii) setCellStyle(cells[[ii]], cs))
+saveWorkbook(wb, xfile)
+```
+
+<!-- Supp Table 2 -->
+```{r include=FALSE}
+clin <- file.path(root, "Data/13058_2016_724_MOESM2_ESM.xlsx") %>%
+  openxlsx::read.xlsx(sheet = 2) %>%
+  dplyr::select(Sample_ID = Sample.ID,
+                Age_Median = `Age.(Median)`,
+                Pathologic_stage = Pathologic.stage,
+                Histological_type = Histological.type)
+
+tab2 <- openxlsx::read.xlsx(file.path(root, "Data/pgen.1007669.s008.xlsx")) %>%
+  transmute(Sample_ID = sample_name, 
+            Number_of_Subclonal_Mutations = number.of.subclonal.mutations) %>%
+  left_join(cl, .) %>%
+  left_join(dat0, .) %>%
+  left_join(clin) %>%
+  dplyr::select(Sample_ID, 
+                Cluster_Number = cluster_name,
+                Age_Median,
+                ER.Status, PR.Status, Her2.Status, PAM50, 
+                Pathologic_stage, Histological_type,
+                n_C_mut, n_C_con, n_TCW_mut, n_TCW_con, APOBEC,
+                Number_of_Subclonal_Mutations, 
+                !!cells1) %>%
+  arrange(Cluster_Number)
+
+openxlsx::write.xlsx(tab2, file = file.path(root, "Data/Supp_T2_patients.xlsx"))
+```
+
+<!-- Supp Table 3 -->
+```{r include=FALSE}
+openxlsx::write.xlsx(tab3, file = file.path(root, "Data/Supp_T3_correlation_with_APOBEC.xlsx"))
+```
+
+
+\pagebreak
+
+```{r eval=T}
+sessionInfo()
+print(paste("Start Time:  ",stdt))
+print(paste("End Time:  ",date()))
+```

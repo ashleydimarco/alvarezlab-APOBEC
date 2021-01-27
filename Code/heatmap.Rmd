@@ -1,0 +1,150 @@
+---
+title: "APOBEC Heatmaps"
+output:
+  html_document: default
+always_allow_html: true
+---
+
+```{r setup, include=F, eval=T}
+set.seed(1234)
+stdt <- date()
+knitr::opts_chunk$set(
+	echo = F,
+	message = FALSE,
+	warning = FALSE,
+	dpi = 300,
+	cache = F
+)
+library(knitr)
+library(tidyverse)
+library(morpheus)
+
+root <- "/mnt/data0/workspace/Alvarez/Ashley-DiMarco/Immune_Signature"
+load(file.path(root, "Data/tcga-brca_cleaned.RData"))
+```
+
+### Figure 6-B
+```{r}
+cells <- c("B cells", "T cells", "T helper cells", "Tcm", "Tem", 
+           "Th1 cells", "Th2 cells", "TFH", "Th17 cells", "TReg", 
+           "CD8 T cells", "Tgd", "Cytotoxic cells", "NK cells", 
+           "NK CD56dim cells", "NK CD56bright cells", "DC", "iDC", 
+           "aDC", "pDC", "Eosinophils", "Macrophages", "Mast cells", 
+           "Neutrophils", "IFN", "MHCII",  "PD1", "PDL1", "PDL2", 
+           "CTLA4", "B7-H4", "TIM-3", "LAG3", "OX40", "OX40L")
+cells1 <- gsub(" ", ".", cells)
+
+dat0 <- combined_pc1 %>%
+  filter_at(vars(one_of(cells1)), negate(is.na)) %>%
+  filter(PAM50 %in% c("Basal", "Her2", "LumA", "LumB") & 
+        (!is.na(APOBEC))) %>%
+  mutate(Sample_ID = paste0(pid, "-", sample))
+```
+
+
+```{r}
+cl <- file.path(root, "Data/clusters_apobec-high.txt") %>%
+  read.table(header = F, 
+             col.names = c("Sample_ID", "cluster"))
+
+dat <- dat0 %>%
+  filter(PAM50 %in% c("Basal", "Her2")) %>%
+  filter(APOBEC > 2) %>%
+  left_join(cl) %>%
+  mutate(wts = case_when(cluster == 1 ~ 2, 
+                         cluster == 2 ~ 1, 
+                         cluster == 3 ~ 4,
+                         cluster == 4 ~ 3))
+
+reorder1 <- function(x, ...){
+  if(nobs(x) == nrow(dat)){
+    reorder(x, wts = dat$wts, agglo.FUN = min, ...)
+  } else {
+    reorder(x, ...)
+  }
+}
+
+mat <- dat[, c("Sample_ID", cells1)] %>%
+  column_to_rownames(var = "Sample_ID") %>%
+  t()
+rownames(mat) <- cells
+
+canno <- dat %>%
+  transmute(annotation1 = 1:nrow(.),
+            PAM50)
+
+morpheus(mat, 
+         reorderfun = reorder1,
+         colorScheme=list(scalingMode="relative", 
+                          colors=c("#354576", "#FDFBFC", "#C83934")), 
+         columnAnnotations = canno,
+         columnSize = 6,
+         columns = list(list(field = "PAM50", display = "text")),
+         tools=list(list(name='Hierarchical Clustering', 
+                         params=list(metric="Euclidean distance",
+                                     linkage_method="Average",
+                                     group_columns_by=list('PAM50'), 
+                                     cluster='Rows and columns'
+                                     )
+                         )
+                    ),
+         rowSize = 10,
+         drawGrid = F
+         )
+```
+
+### Supp Figure S9
+```{r}
+cl <- file.path(root, "Data/clusters_apobec-low.txt") %>%
+  read.table(header = F, 
+             col.names = c("Sample_ID", "cluster"))
+
+dat <- dat0 %>%
+  filter(PAM50 %in% c("Basal", "Her2")) %>%
+  filter(APOBEC <= 2) %>%
+  left_join(cl) %>%
+  mutate(wts = case_when(cluster == 1 ~ 4, 
+                         cluster == 2 ~ 3, 
+                         cluster == 3 ~ 2,
+                         cluster == 4 ~ 1))
+
+mat <- dat[, c("Sample_ID", cells1)] %>%
+  column_to_rownames(var = "Sample_ID") %>%
+  t()
+rownames(mat) <- cells
+
+canno <- dat %>%
+  transmute(annotation1 = 1:nrow(.),
+            `Patient ID` = Sample_ID,
+            PAM50)
+
+morpheus(mat, 
+         reorderfun = reorder1,
+         colorScheme=list(scalingMode="relative", 
+                          colors=c("#354576", "#FDFBFC", "#C83934")), 
+         columnAnnotations = canno,
+         columnSize = 6,
+         columns = list(list(field = "Patient ID")
+                        # list(field = "PAM50", display = "text")
+                        ),
+         tools=list(list(name='Hierarchical Clustering', 
+                         params=list(metric="Euclidean distance",
+                                     linkage_method="Average",
+                                     group_columns_by=list('PAM50'), 
+                                     cluster='Rows and columns'
+                                     )
+                         )
+                    ),
+         rowSize = 10
+         )
+```
+
+
+
+\pagebreak
+
+```{r eval=T}
+sessionInfo()
+print(paste("Start Time:  ",stdt))
+print(paste("End Time:  ",date()))
+```
