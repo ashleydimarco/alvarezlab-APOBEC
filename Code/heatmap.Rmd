@@ -19,8 +19,8 @@ library(knitr)
 library(tidyverse)
 library(morpheus)
 
-root <- "/mnt/data0/workspace/Alvarez/Ashley-DiMarco/Immune_Signature"
-load(file.path(root, "Data/tcga-brca_cleaned.RData"))
+wd <- "/mnt/data1/workspace/Alvarez/APOBEC"
+load(file.path(wd, "Proc/tcga-brca_cleaned.RData"))
 ```
 
 ### Figure 6-B
@@ -43,7 +43,7 @@ dat0 <- combined_pc1 %>%
 
 
 ```{r}
-cl <- file.path(root, "Data/clusters_apobec-high.txt") %>%
+cl <- file.path(wd, "Proc/clusters_apobec-high.txt") %>%
   read.table(header = F, 
              col.names = c("Sample_ID", "cluster"))
 
@@ -95,7 +95,7 @@ morpheus(mat,
 
 ### Supp Figure S9
 ```{r}
-cl <- file.path(root, "Data/clusters_apobec-low.txt") %>%
+cl <- file.path(wd, "Proc/clusters_apobec-low.txt") %>%
   read.table(header = F, 
              col.names = c("Sample_ID", "cluster"))
 

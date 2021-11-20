@@ -23,8 +23,8 @@ library(ComplexHeatmap)
 library(openxlsx)
 library(ggsignif)
 
-root <- "/mnt/data0/workspace/Alvarez/Ashley-DiMarco/Immune_Signature"
-load(file.path(root, "Data/tcga-brca_cleaned.RData"))
+wd <- "/mnt/data0/workspace/Alvarez/Ashley-DiMarco/Immune_Signature"
+load(file.path(wd, "Proc/tcga-brca_cleaned.RData"))
 
 cells <- c("B cells", "T cells", "T helper cells", "Tcm", "Tem",
            "Th1 cells", "Th2 cells", "TFH", "Th17 cells", "TReg",
@@ -213,13 +213,13 @@ draw(hm, heatmap_legend_side = "left")
 
 ### Figure 6-D
 ```{r fig.height=2.7, fig.width=4.8}
-cl_high <- file.path(root, "Data/clusters_apobec-high.txt") %>%
+cl_high <- file.path(wd, "Proc/clusters_apobec-high.txt") %>%
   read.table(header = F, col.names = c("Sample_ID", "cluster")) %>%
   mutate(cluster_name = case_when(cluster == 1 ~ "APOBEC-high HER2-2",
                            cluster == 2 ~ "APOBEC-high HER2-1",
                            cluster == 3 ~ "APOBEC-high Basal-2",
                            cluster == 4 ~ "APOBEC-high Basal-1"))
-cl_low <- file.path(root, "Data/clusters_apobec-low.txt") %>%
+cl_low <- file.path(wd, "Proc/clusters_apobec-low.txt") %>%
   read.table(header = F, 
              col.names = c("Sample_ID", "cluster")) %>%
   mutate(cluster_name = case_when(cluster == 1 ~ "APOBEC-low Basal-2",
@@ -229,7 +229,7 @@ cl_low <- file.path(root, "Data/clusters_apobec-low.txt") %>%
   
 cl <- rbind(cl_high, cl_low)
 
-dat <- read.xlsx(file.path(root, "Data/pgen.1007669.s008.xlsx")) %>%
+dat <- read.xlsx(file.path(wd, "RawData/pgen.1007669.s008.xlsx")) %>%
   transmute(Sample_ID = sample_name, 
             subclonal = number.of.subclonal.mutations) %>%
   left_join(cl, .) %>%
@@ -295,7 +295,7 @@ for(g in groups){
 }
 
 sheetname <- "Gene lists"
-xfile <- file.path(root, "Data/Supp_T1_gene_lists_labelled.xlsx")
+xfile <- file.path(wd, "Results/Supp_T1_gene_lists_labelled.xlsx")
 write.xlsx(m, 
            file = xfile, 
            sheetName = sheetname,
@@ -328,14 +328,14 @@ saveWorkbook(wb, xfile)
 
 <!-- Supp Table 2 -->
 ```{r include=FALSE}
-clin <- file.path(root, "Data/13058_2016_724_MOESM2_ESM.xlsx") %>%
+clin <- file.path(wd, "RawData/13058_2016_724_MOESM2_ESM.xlsx") %>%
   openxlsx::read.xlsx(sheet = 2) %>%
   dplyr::select(Sample_ID = Sample.ID,
                 Age_Median = `Age.(Median)`,
                 Pathologic_stage = Pathologic.stage,
                 Histological_type = Histological.type)
 
-tab2 <- openxlsx::read.xlsx(file.path(root, "Data/pgen.1007669.s008.xlsx")) %>%
+tab2 <- openxlsx::read.xlsx(file.path(wd, "Proc/pgen.1007669.s008.xlsx")) %>%
   transmute(Sample_ID = sample_name, 
             Number_of_Subclonal_Mutations = number.of.subclonal.mutations) %>%
   left_join(cl, .) %>%
@@ -351,12 +351,12 @@ tab2 <- openxlsx::read.xlsx(file.path(root, "Data/pgen.1007669.s008.xlsx")) %>%
                 !!cells1) %>%
   arrange(Cluster_Number)
 
-openxlsx::write.xlsx(tab2, file = file.path(root, "Data/Supp_T2_patients.xlsx"))
+openxlsx::write.xlsx(tab2, file = file.path(wd, "Results/Supp_T2_patients.xlsx"))
 ```
 
 <!-- Supp Table 3 -->
 ```{r include=FALSE}
-openxlsx::write.xlsx(tab3, file = file.path(root, "Data/Supp_T3_correlation_with_APOBEC.xlsx"))
+openxlsx::write.xlsx(tab3, file = file.path(wd, "Results/Supp_T3_correlation_with_APOBEC.xlsx"))
 ```
 
 

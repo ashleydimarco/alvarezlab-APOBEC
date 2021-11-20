@@ -109,51 +109,52 @@ library(tidyverse)
 library(xtable)
 library(openxlsx)
 library(reshape2)
-library(ggcorrplot)
 library(Biostrings)
 library(edgeR)
 library(limma)
 library(SummarizedExperiment)
 library(ggcorrplot)
-library(ComplexHeatmap, lib = "/home.local/xq24/R/tmp_lib")
+library(ComplexHeatmap)
 library(circlize)
 library(MASS)
 
-root <- "/data1/workspace/DCI/Force/Immune_Signature"
-dir_data <- file.path(root, "Data")
+fastafile <- "/mnt/data2/Annotation/GDC/GRCh38.d1.vd1.fa"
+wd <- "/mnt/data1/workspace/Alvarez/APOBEC"
+dir_proc <- file.path(wd, "Proc")
+dir_data <- file.path(wd, "RawData")
 @ 
 \end{frame}
 
 <<echo=F>>=
-query <- F
-preprocess <- F
-run <- F
-
-if(run == F){
-  load(file.path(dir_data, "tcga-brca_cleaned.RData"))
-} else {
-  if(preprocess == F){
-    load(file.path(dir_data, "tcga-brca_apobec-enrichment_mutect2.RData"))
-    load(file.path(dir_data, "tcga-brca_rse_proc.RData"))
-    load(file.path(dir_data, "signatures_immune.RData"))
-  } else {
-    if(query == F){
-      load(file.path(dir_data, "fasta_grch38_chr24.RData"))
-      load(file.path(dir_data, "tcga-brca_maf_mutect2.RData"))
-      load(file.path(dir_data, "tcga-brca_rse_raw.RData"))
-    }
-  } 
-}
+# query <- F
+# preprocess <- F
+# run <- F
+# 
+# if(run == F){
+#   load(file.path(dir_proc, "tcga-brca_cleaned.RData"))
+# } else {
+#   if(preprocess == F){
+#     load(file.path(dir_proc, "tcga-brca_apobec-enrichment_mutect2.RData"))
+#     load(file.path(dir_proc, "tcga-brca_rse_proc.RData"))
+#     load(file.path(dir_proc, "signatures_immune.RData"))
+#   } else {
+#     if(query == F){
+#       load(file.path(dir_proc, "fasta_grch38_chr24.RData"))
+#       load(file.path(dir_proc, "tcga-brca_maf_mutect2.RData"))
+#       load(file.path(dir_proc, "tcga-brca_rse_raw.RData"))
+#     }
+#   } 
+# }
 @
 
 
 \section{Data}
 \subsection{Reference Genome}
 \begin{frame}[fragile]{Reference file}
-<<eval=query, results="markup">>=
+<<eval=F, results="markup">>=
 # https://gdc.cancer.gov/about-data/data-harmonization-and-generation/gdc-reference-files
 # Fasta
-grch38 <- readDNAStringSet(file.path(wd, "Data/Reference/GRCh38.d1.vd1.fa"))
+grch38 <- readDNAStringSet(fastafile)
 chr24 <- grch38[1:24]
 names(chr24) <- paste0("chr", c(1:22, "X", "Y"))
 # Check
@@ -161,24 +162,24 @@ names(chr24) <- paste0("chr", c(1:22, "X", "Y"))
 #           mapply(function(ch, p) as.character(chr24[[ch]][p]),
 #                  ch=snv_mt2$chr, p=snv_mt2$pos, USE.NAMES = F))
 save(chr24,
-     file = file.path(dir_data, "fasta_grch38_chr24.RData"))
+     file = file.path(dir_proc, "fasta_grch38_chr.RData"))
 @
 \end{frame}
 
 
 \subsection{TCGA-BRCA Mutation}
 \begin{frame}[fragile]{Mutation data}
-<<eval=query, results="markup">>=
+<<eval=F, results="markup">>=
 # 06/15/2018
 maf_mt2 <- GDCquery_Maf(tumor = "BRCA", 
                         pipelines = "mutect2",
                         save.csv = T, 
-                        directory = file.path(dir_data, "TCGA-BRCA"))
+                        directory = file.path(dir_proc, "TCGA-BRCA"))
 save(maf_mt2,
-     file = file.path(dir_data, "tcga-brca_maf_mutect2.RData"))
+     file = file.path(dir_proc, "tcga-brca_maf_mutect2.RData"))
 @
 
-<<eval=preprocess, results='markup'>>=
+<<eval=F, results='markup'>>=
 snv_mt2 <- maf_mt2 %>%
   filter(Variant_Type == "SNP") %>%
   transmute(gene = Hugo_Symbol, 
@@ -195,7 +196,7 @@ snv_mt2 <- maf_mt2 %>%
 
 \subsection{TCGA-BRCA Mutation - APOBEC Enrichment}
 \begin{frame}[fragile]{APOBEC Enrichment Scores}
-<<eval=preprocess>>=
+<<eval=F>>=
 get_apobec <- function(snv_caller){
   dat <- snv_caller %>% mutate(mut = paste(ref, alt2, sep=">")) %>%
     filter(mut %in% c("C>G", "C>T", "G>C", "G>A")) %>%
@@ -217,7 +218,7 @@ get_apobec <- function(snv_caller){
 }
 es_mt2 <- get_apobec(snv_mt2)
 save(snv_mt2, es_mt2, 
-     file = file.path(dir_data, "tcga-brca_apobec-enrichment_mutect2.RData"))
+     file = file.path(dir_proc, "tcga-brca_apobec-enrichment_mutect2.RData"))
 @
 \end{frame}
 
@@ -240,7 +241,7 @@ Netanely, Dvir, et al. "Expression and methylation patterns partition luminal-A 
 
 \subsection{TCGA-BRCA Expression}
 \begin{frame}[fragile]{Expression data}
-<<eval=query, results="markup">>=
+<<eval=F, results="markup">>=
 # query (07/16/2018)
 query_rse <- GDCquery(project="TCGA-BRCA",
                       data.category = "Transcriptome Profiling",
@@ -251,13 +252,13 @@ GDCdownload(query = count_query,
 rse_raw <- GDCprepare(query = count_query, 
                        directory = dir_data)
 save(query_rse, rse_raw,
-     file = file.path(dir_data, "tcga-brca_rse_raw.RData"))
+     file = file.path(dir_proc, "tcga-brca_rse_raw.RData"))
 @
 
 <<eval=preprocess, results="markup">>=
-gdat_cnt <- assay(rse_brca)
-pdat <- colData(rse_brca)
-anno <- rowData(rse_brca)
+gdat_cnt <- assay(rse_raw)
+pdat <- colData(rse_raw)
+anno <- rowData(rse_raw)
 
 gdat_cnt_flt <- gdat_cnt[rowQuantiles(gdat_cnt, probs=2/3, na.rm=T)>0, ]
 norm_factors <- calcNormFactors(gdat_cnt_flt)
@@ -269,13 +270,13 @@ rse_proc <- SummarizedExperiment(assays = gdat,
                                  colData = pdat[colnames(gdat), ],
                                  rowData = anno[rownames(gdat), ])
 
-save(rse_proc, file = file.path(dir_data, "tcga-brca_rse_proc.RData"))
+save(rse_proc, file = file.path(dir_proc, "tcga-brca_rse_proc.RData"))
 @
 \end{frame}
 
 
 \subsection{Immune Signatures}
-<<eval=preprocess, echo=F, results="asis">>=
+<<eval=F, echo=F, results="asis">>=
 # read raw signature sets
 sigs_raw <- read.xlsx(file.path(dir_data, "Faruki et al 2017_Gene Sets and Checkpoints_AD.xlsx"),
                       sheet = 1)
@@ -305,11 +306,12 @@ tab_sigs <- melt(sigs) %>%
   ungroup()
 
 save(tab_sigs,
-     file = file.path(dir_data, "signatures_immune.RData"))
+     file = file.path(dir_proc, "signatures_immune.RData"))
 @
 
 \begin{frame}[fragile]{Immune Signatures - aliases}
-<<echo=F, results="asis">>=
+<<eval=T, echo=F, results="asis">>=
+load(file.path(dir_proc, "signatures_immune.RData"))
 tab_alias <- tab_sigs %>% 
   filter(original != official) %>%
   arrange(group)
@@ -320,7 +322,7 @@ print(xtable(tab_alias), scale = 0.6,
 \end{frame}
 
 \begin{frame}[fragile]{Immune Signatures - genes by group}
-<<echo=F, results="asis">>=
+<<eval=T, echo=F, results="asis">>=
 tab_group <- tab_sigs %>%
   group_by(group) %>%
   summarize(genes = paste(display, collapse = ", "))
@@ -332,7 +334,7 @@ print(xtable(tab_group[1:17, ], align = "lp{0.8in}p{4in}"),
 \end{frame}
 
 \begin{frame}[fragile]{Immune Signatures - genes by group}
-<<echo=F, results="asis">>=
+<<eval=T, echo=F, results="asis">>=
 print(xtable(tab_group[18:35, ], align = "lp{0.8in}p{4in}"), 
       scale = 0.8, 
       sanitize.text.function = sanitize_text)
@@ -341,7 +343,7 @@ print(xtable(tab_group[18:35, ], align = "lp{0.8in}p{4in}"),
 
 
 %\section{Analysis}
-<<eval=run, echo=F>>=
+<<eval=F, echo=F>>=
 rse <- rse_proc
 expr <- assay(rse)
 anno <- as.data.frame(rowData(rse))
@@ -352,7 +354,7 @@ sdat <- data.frame(bcd = colnames(rse), stringsAsFactors = F) %>%
   separate(bcd, remove = F,
            into = c("TCGA", "TSS", "Patient", "sample", 
                     "portion", "plate", "center")) %>%
-  filter(sample == "01A")
+  filter(sample == "01A") # Primary Solid Tumor
 ids_dup <- with(sdat, pid[duplicated(pid)])
 sdat <- filter(sdat, (!pid %in% ids_dup) | (pid %in% ids_dup & plate == "A277"))
 
@@ -362,7 +364,7 @@ colnames(expr) <- sdat$pid
 # dim(expr)
 @
 
-<<eval=run, echo=F>>=
+<<eval=F, echo=F>>=
 expr_sigs <- tab_sigs %>%
   dplyr::select(group, symbol) %>%
   cbind(expr[.$symbol, ]) %>%
@@ -402,13 +404,13 @@ combined_pc1 <- pam50 %>%
   full_join(es_mt2, by = "pid")
 
 save(combined_avg, combined_pc1, tab_sigs,
-     file = file.path(dir_data, "tcga-brca_cleaned.RData"))
+     file = file.path(dir_proc, "tcga-brca_cleaned.RData"))
 @
 
 
 
 \section{Data pattern}
-<<echo=F, results='asis'>>=
+<<echo=T, results='asis'>>=
 plot_var_by_type <- function(data, var){
 
   data_plt <- data %>%
@@ -460,6 +462,7 @@ combined <- combined_avg
 subtypes <- c("All-Patients", sort(unique(combined$PAM50)))
 groups <- sort(setdiff(unique(tab_sigs$group), "APOBEC3B")) #!
 @
+
 
 \subsection{Immune signature and APOBEC3B expression}
 <<echo=F, results='asis'>>=
@@ -530,6 +533,18 @@ for(subtype in subtypes){
     cat("\\end{minipage}\n\n")
   cat("\\end{frame}\n\n")
 }
+@
+
+
+<<echo=F>>=
+ids <- combined[, c("pid", "PAM50", "APOBEC", groups)] %>%
+  filter_at(vars(-PAM50), all_vars(!is.na(.))) %>% 
+  mutate(Group = ifelse(APOBEC <= cutoff_apobec, 
+                        "APOBEC-Low",
+                        "APOBEC-High")) %>%
+  dplyr::select(-one_of(groups))
+write.csv(ids, file = file.path(wd, "Results/groups.csv"), 
+          quote = F, row.names = F)
 @
 
 \subsection{Immune signature and APOBEC enrichment (high/low)}
