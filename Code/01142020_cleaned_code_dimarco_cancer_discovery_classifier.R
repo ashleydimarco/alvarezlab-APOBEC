@@ -1,6 +1,6 @@
 #################################################
 # Sarah C. Van Alsten                           #
-# Date: January 14, 2020                        #
+# Date: January 30, 2020                        #
 # Institution: UNC Chapel Hill                  #
 # Purpose: Predict Signature Calls for DiMarco  #
 #          Immune Paper                         #
@@ -8,6 +8,9 @@
 #################################################
 
 library(tidyverse)
+
+#She said she could send us her TCGA IDs with the APOBEC enrichment scores (just in case they are different from ours) 
+#and I figured we could see if our predictor pulled out those calls
 
 
 #read in the data
@@ -20,9 +23,11 @@ di$apobec_high <- ifelse(di$apobec > 2, 1, 0)
 y <- read.table("data/tcga_brca_all_signature_versions.txt", header = 1, sep = "\t")
 
 #limit the observations in di to those that are also in y where we have a prediction for APOBEC signature
+table(di$sample_id %in% substr(y$Barcode.x, 1, 15))
 di$sample_id[which(!di$sample_id %in% substr(y$Barcode.x, 1, 15))]
 y$Barcode.x[which(!substr(y$Barcode.x, 1, 15) %in% di$sample_id)]
 
+which(!substr(y$Barcode.x, 1, 15) %in% di$sample_id)
 
 #use the FULL set of available genes, not just the ones in the 184 panel
 x2 <- read.table("data/TCGA_BRCA_1201_Tumors_Log.txt", header = T, sep = "\t")
@@ -31,32 +36,39 @@ x2 <- x2[,-1]
 
 
 #need to be median centered and then imputed
-source("clanc.R")
-source("arrayTools_6_22.R")
+source("C:/Users/Owner/OneDrive/Documents/UNC/Research/dna_repair/code/clanc.R")
+source("C:/Users/Owner/OneDrive/Documents/UNC/Research/IMMUNE/immune_signatures/code/arrayTools_6_22.R")
 
 x2 <- x2 %>% medianCtr()
 
 #write it out, then impute with readarray
 write.table(x2, "data/alltcgalogmed.txt", sep = "\t", col.names = NA)
 
-#impute any missing genes
 x3 <- readarray("data/alltcgalogmed.txt")
 write.table(x3$xd, "data/alltcgalogmedimpute.txt")
 
 #find the most variable genes
 geneList <- rownames(x3$xd)
 
+A2b <<- read.table("data/alltcgalogmedimpute.txt")
+
 #if we want UNADJUSTED scores output instead, use this function instead
-fullUnadjFun <- function(baseString, geneList1 = geneList, data1 = y){
+#rows argument denotes the row numbers of the training set in which to select the most variable genes
+fullUnadjFun <- function(baseString, rown, geneList1 = geneList, data1 = y){
   
-  A2 <- read.table("data/alltcgalogmedimpute.txt")
+  A2 <- A2b[,rown]
   
   #extract apobec calls
   apobec.sig <- data1$apobec_high
+  apobec.sig <- apobec.sig[rown]
   
   #can't have missing values for the outcome variables in SAM.
   #make subsets that don't include missings
   apobec.A <- A2[,!is.na(apobec.sig)]
+  
+  print(dim(apobec.A))
+  print(length(apobec.sig))
+  print(length(apobec.sig[!is.na(apobec.sig)]))
   
   ##########################################################################
   
@@ -151,44 +163,7 @@ writeSigGene <- function(sigobj, filename){
 }
 
 
-
-m1 <- fullUnadjFun(baseString = "test")
-
-#now, want to get the most variably expressed genes
-m1.sub <- m1 %>%
-  arrange(desc(fold_change)) %>%
-  #arrange(p_value) %>%
-  slice_head(prop = .05)
-
-m1.sub <- m1 %>%
-  arrange(desc(fold_change)) %>%
-  #arrange(p_value) %>%
-  slice_head(prop = .1)
-
-#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
-geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
-write.table(geneSub, "data/dimarco/top10percentVariable.txt", sep = "\t", col.names = NA)
-
-y$barcode_short2 <- str_replace_all(substr(y$barcode_short, 1, 16), "-", "\\.")
-
-geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
-
-
-# di <- di %>% filter(sample_id %in% substr(y$Barcode.x, 1, 15))
-# y <- y %>% filter(substr(Barcode.x, 1, 15) %in% di$sample_id)
-# y$Barcode.x <- substr(y$Barcode.x, 1, 15)
-# 
-# y <- di %>%
-#   dplyr::select(sample_id, apobec_high) %>%
-#   full_join(y, by = c("sample_id" = "Barcode.x"))
-# 
-# table(y$Apo_targeted, y$apobec_high)
-# table(y$APOBEC_wes, y$apobec_high)
-# table(y$apo_expr, y$apobec_high)
-
-
-
-# Helper Functions Classifier -----------------------------------------------
+# Helper Functions -----------------------------------------------
 
 percCorr <- function(tab){
   
@@ -291,8 +266,6 @@ allStats <- function(tab){
   
 }
 
-
-
 #i is the number of genes per groups
 #x1 is the complete set of genes to evaluate
 #signature is which of the mutation signatures to evaluate
@@ -336,30 +309,32 @@ rocPlot <- function(dat, signature){
 #extra is whether to return a particular model (for a certain model)
 #i is the number of genes per groups
 #x1 is the complete set of genes to evaluate
-#x3 is the set of genes with >50% non missing
 #signature is which of the mutation signatures to evaluate
-runTuneTrain <- function(i, x1 = geneSub, extra = NULL, signature = "apobec_high"){
+runTuneTrain <- function(i, rown, x1 = geneSub, extra = NULL, signature = "apobec_high"){
+  
+  
+  y.new <- y[rown,]
   
   #depending on what signature is given, subset x1/x3 based into stratified training and test set
   if (signature == "Aging"){
-    y$samp <- ifelse(rownames(y) %in% which(y$Aging == 2), 1, 0)
+    y.new$samp <- ifelse(rownames(y.new) %in% which(y.new$Aging == 2), 1, 0)
   } else if (signature == "UV"){
-    y$samp <- ifelse(rownames(y) %in% which(y$UV == 2), 1, 0)
+    y.new$samp <- ifelse(rownames(y.new) %in% which(y.new$UV == 2), 1, 0)
   } else if (signature == "HR"){
-    y$samp <-ifelse(rownames(y) %in% which(y$HR == 2), 1, 0)
+    y.new$samp <-ifelse(rownames(y.new) %in% which(y.new$HR == 2), 1, 0)
   } else if (signature == "APOBEC"){
-    y$samp <- ifelse(rownames(y) %in% which(y$APOBEC == 2), 1, 0)
+    y.new$samp <- ifelse(rownames(y.new) %in% which(y.new$APOBEC == 2), 1, 0)
   } else if (signature == "APOBEC3A3B"){
-    y$samp <- ifelse(rownames(y) %in% which(y$APOBEC3A3B == 2), 1, 0)
+    y.new$samp <- ifelse(rownames(y.new) %in% which(y.new$APOBEC3A3B == 2), 1, 0)
   } else if (signature == "apobec_high"){
-    y$samp <- ifelse(rownames(y) %in% which(y$apobec_high == 2), 1, 0)
+    y.new$samp <- ifelse(rownames(y.new) %in% which(y.new$apobec_high == 2), 1, 0)
   }
   
-  train <- y %>%
+  train <- y.new %>%
     mutate(rown = row_number())%>%
     group_by(samp)%>%
     slice_sample(prop = .7)
-  test <- y %>%
+  test <- y.new %>%
     mutate(rown = row_number())%>%
     filter(!rown %in% train$rown)
   
@@ -468,7 +443,6 @@ concordancePlot <- function(dat, signature2){
   
 }
 
-
 #function to do everything: run the algorithm on full sample, make plots
 #then run algorithm on test/training set and make plots; return both data frames
 runClanc <- function(signature1, genes = NULL){
@@ -507,96 +481,294 @@ runClanc <- function(signature1, genes = NULL){
 
 
 
+di <- di %>% filter(sample_id %in% substr(y$Barcode.x, 1, 15))
+y <- y %>% filter(substr(Barcode.x, 1, 15) %in% di$sample_id)
+y$Barcode.x <- substr(y$Barcode.x, 1, 15)
 
-#y$apobec_high <- factor(ifelse(y$apobec_high == 1, 2, 1))
-apo.pred <- runClanc("apobec_high")
-apo.pred.df <- apo.pred[[1]] %>%
+y <- di %>%
+  dplyr::select(sample_id, apobec_high) %>%
+  full_join(y, by = c("sample_id" = "Barcode.x"))
+
+table(y$Apo_targeted, y$apobec_high)
+table(y$APOBEC_wes, y$apobec_high)
+table(y$apo_expr, y$apobec_high)
+
+
+#needs to be in 1/2 format for samr selection
+y$apobec_high <- ifelse(y$apobec_high == 1, 2, 1)
+
+#define the 10 folds for cross validation
+set.seed(29047)
+y$sample_fold <- sample(1:nrow(y),size = nrow(y),replace = F)
+y$sample_fold <- factor(as.numeric(gtools::quantcut(y$sample_fold, q = 10)))
+
+
+
+# Iteration 1 of CV -------------------------------------------------------
+
+#leave fold 1 out and perform full adj fun
+m1 <- fullUnadjFun("fold1", which(!y$sample_fold==1))
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+y$barcode_short2 <- str_replace_all(substr(y$barcode_short, 1, 16), "-", "\\.")
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==1)]
+
+
+full1 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==1),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+# Iteration 2 of CV -------------------------------------------------------
+
+#leave fold 2 out and perform full adj fun
+m1 <- fullUnadjFun("fold2", which(!y$sample_fold==2))
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==2)]
+
+
+full2 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==2),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+# Iteration 3 of CV -------------------------------------------------------
+
+#leave fold 3 out and perform full adj fun
+m1 <- fullUnadjFun("fold1", which(!y$sample_fold==3))
+
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==3)]
+
+
+full3 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==3),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+# Iteration 4 of CV -------------------------------------------------------
+
+#leave fold 4 out and perform full adj fun
+m1 <- fullUnadjFun("fold4", which(!y$sample_fold==4))
+
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==4)]
+
+
+full4 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==4),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+
+# Iteration 5 of CV -------------------------------------------------------
+
+#leave fold 5 out and perform full adj fun
+m1 <- fullUnadjFun("fold5", which(!y$sample_fold==5))
+
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==5)]
+
+
+full5 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==5),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+# Iteration 6 of CV -------------------------------------------------------
+
+#leave fold 6 out and perform full adj fun
+m1 <- fullUnadjFun("fold6", which(!y$sample_fold==6))
+
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==6)]
+
+
+full6 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==6),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+
+# Iteration 7 of CV -------------------------------------------------------
+
+#leave fold 7 out and perform full adj fun
+m1 <- fullUnadjFun("fold7", which(!y$sample_fold==7))
+
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==7)]
+
+
+full7 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==7),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+
+# Iteration 8 of CV -------------------------------------------------------
+
+#leave fold 8 out and perform full adj fun
+m1 <- fullUnadjFun("fold8", which(!y$sample_fold==8))
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==8)]
+
+
+full8 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==8),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+
+# Iteration 9 of CV -------------------------------------------------------
+
+#leave fold 9 out and perform full adj fun
+m1 <- fullUnadjFun("fold9", which(!y$sample_fold==9))
+
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==9)]
+
+
+full9 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==9),
+                                                        x1 = geneSub, signature = "apobec_high"))
+
+
+
+
+# Iteration 10 of CV ------------------------------------------------------
+
+#leave fold 10 out and perform full adj fun
+m1 <- fullUnadjFun("fold10", which(!y$sample_fold==10))
+
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
+
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+geneSub <- geneSub[,which(!y$sample_fold==10)]
+
+
+full10 <-  purrr::map_dfr(.x = 1:513, .f = ~runTuneTrain(i = .x, rown = which(!y$sample_fold==10),
+                                                         x1 = geneSub, signature = "apobec_high"))
+
+
+
+#attach all 10 of the data sets into one
+full <- full1 %>%
+  bind_rows(full2) %>%
+  bind_rows(full3) %>%
+  bind_rows(full4) %>%
+  bind_rows(full5) %>%
+  bind_rows(full6) %>%
+  bind_rows(full7) %>%
+  bind_rows(full8) %>%
+  bind_rows(full9) %>%
+  bind_rows(full10)
+
+
+
+full <- full %>%
   mutate(youden = as.numeric(sensitivity)+ as.numeric(specificity)-1)
 
 
-apo.pred.df %>%
-  #filter(as.numeric(ngenes)<1) %>%
-  arrange(desc(youden)) %>%
-  slice(1:10)
-
-
-apo.pred[[2]]
-
-apo.tune.df <- apo.pred[[3]]
-
-apo.tune.df %>%
-  #filter(as.numeric(ngenes)<15) %>%
-  mutate(youden = as.numeric(sensitivity)+ as.numeric(specificity)-1)%>%
-  arrange(desc(youden)) %>%
-  slice(1:20) # 10 genes performs well on both in sample and out of sample
-
-# 10 Fold Cross Validation to Get Bounds for the Sens/Spec ----------------
-
-#for true 10-fold cross validation, each sample is in the test set once and training set 9 times
-#rather than there being random assignment in each instance. Randomly assign each of the
-#samples a number, 1:10, for which iteration it serves time in the test set
-y$samp <- floor(runif(nrow(y), 1, 11))
-
-
-runTuneTrainCV <- function(i, x1 = geneSub, signature = "apobec_high", fold){
-  
-  train <- dat %>%
-    mutate(rown = row_number())%>%
-    filter(samp != fold)
-  test <- dat %>%
-    mutate(rown = row_number())%>%
-    filter(samp == fold)
-  
-  #now subset x1 into training and test sets
-  x1train <- x1[, train$rown]
-  x1test <- x1[, test$rown]
-  
-  sigCol <- train[,names(train)== signature]
-  sigCol2 <- test[,names(test)== signature]
-  
-  
-  #in sample prediction
-  Pre <-clancPredict(x1train[,!is.na(sigCol)], sigCol[!is.na(sigCol)],
-                     x1train[,!is.na(sigCol)], i) 
-  
-  #out of sample prediction
-  Pre3 <-clancPredict(x1train[,!is.na(sigCol)], sigCol[!is.na(sigCol)],
-                      x1test[,!is.na(sigCol2)], i) 
-  
-  
-  t1 <- table(sigCol[!is.na(sigCol)],Pre$predictions[,2])
-  t3 <- table(sigCol2[!is.na(sigCol2)],Pre3$predictions[,2])
-  
-  t1Stats <- allStats(t1)
-  t3Stats <- allStats(t3)
-    
-  df <- rbind.data.frame(c(unlist(allStats(t1)), "full", i, "in_sample"),
-                         c(unlist(allStats(t3)), "full", i, "out_sample"))
-  names(df) <- c("percent_correct", "sensitivity", "specificity", "ppv", "npv", "mod_type", "ngenes", "in_out")
-    
-  return(df)
-    
-  
-}
-
-runClancCV <- function(signature1){
-  
-  for (i in 1:10){
-    if (i==1){
-      full <-  purrr::map_dfr(.x = 1:50, .f = ~runTuneTrainCV(i = .x, x1 = geneSub, signature = signature1, fold = i))
-    } else{
-      f <- purrr::map_dfr(.x = 1:50, .f = ~runTuneTrainCV(i = .x, x1 = geneSub, signature = signature1, fold = i))
-      full <- bind_rows(full, f)
-    }
-    
-  }
-  return(full)
-}
-
+# Plotting ----------------
 
 plotCV <- function(d, signature){
   d2a <-  d %>%
-    filter(mod_type=="full")%>%
+    filter(mod_type=="full" & in_out == "in_sample")%>%
     mutate(sensitivity = as.numeric(sensitivity),
            specificity = as.numeric(specificity),
            ngenes = as.numeric(ngenes))%>%
@@ -638,35 +810,34 @@ plotCV <- function(d, signature){
   
   sensPlot <- d2 %>%
     ggplot(aes(x = ngenes, y = avg_sens, color = in_out)) +
-    geom_point(position = position_dodge(width = .5))+
-    geom_ribbon(aes(ymin = (avg_sens - sd_sens), ymax = (avg_sens + sd_sens), fill = in_out), position = position_dodge(width = .5),
-                alpha = .1) +
+    geom_point(position = position_dodge(width = .5), size = .5, alpha = .8)+
+    geom_errorbar(aes(ymin = (avg_sens - sd_sens), ymax = (avg_sens + sd_sens)), position = position_dodge(width = .5),
+                  alpha = .1) +
     theme_bw() +
     #ggtitle(paste0("10-Fold Cross Validation of Sensitivity for ", signature)) +
     labs(color = "Prediction Type", x = "Genes Per Group", y = "Sensitivity (%)") +
-    geom_smooth(alpha = .1, aes(color = in_out, fill = in_out), se = F, linetype = "dashed") +
-    guides(fill = F) + ylim(c(45,80))
+    geom_smooth(alpha = .1, aes(color = in_out, fill = in_out), se = F, linetype = "dashed", span = 100) +
+    guides(fill = F) + ylim(c(50,75))
   
   specPlot <- d2 %>%
     ggplot(aes(x = ngenes, y = avg_spec, color = in_out)) +
-    geom_point(position = position_dodge(width = .5))+
-    geom_ribbon(aes(ymin = (avg_spec - sd_spec), ymax = (avg_spec + sd_spec), fill = in_out), position = position_dodge(width = .5),
-                alpha = .1) +
+    geom_point(position = position_dodge(width = .5), size = .5, alpha = .8)+
+    geom_errorbar(aes(ymin = (avg_spec - sd_spec), ymax = (avg_spec + sd_spec)), position = position_dodge(width = .5),
+                  alpha = .1) +
     theme_bw() +
     #ggtitle(paste0("10-Fold Cross Validation of Specificity for ", signature)) +
     labs(color = "Prediction Type", x = "Genes Per Group", y = "Specificity (%)") +
-    geom_smooth(alpha = .1, aes(color = in_out, fill = in_out), se = F, linetype = "dashed") +
-    guides(fill = F)+ ylim(c(45,80))
+    geom_smooth(alpha = .1, aes(color = in_out, fill = in_out), se = F, linetype = "dashed", span = 100) +
+    guides(fill = F)+ ylim(c(50,75))
   
   return(list(sensPlot, specPlot))
 }
 
-apo.cv <- runClancCV("apobec_high")
-apo.cv3 <- runClancCV("apobec_high")
-apoCVplot <- plotCV(apo.cv, "apobec")
 
 
-summarized <- apo.cv %>%
+plots <- plotCV(full)
+
+summarized <- full %>%
   group_by(ngenes, in_out)  %>%
   mutate(sensitivity = as.numeric(sensitivity),
          specificity = as.numeric(specificity))%>%
@@ -680,35 +851,51 @@ summarized <- apo.cv %>%
             sd_spec = sd(specificity),
             .groups = "keep")
 
-summarized2 <-apo.cv %>%
+summarized2 <- full%>%
   mutate(youden = as.numeric(sensitivity)/100+as.numeric(specificity)/100-1)%>%
   group_by(ngenes, in_out)%>%
   summarise(avg_y = mean(youden),
             sd_y = sd(youden),
             .groups = "keep")
 
-#4 actually looks pretty good for sensitivity here
+summarized2 %>%
+  group_by(in_out) %>%
+  arrange(desc(avg_y)) %>%
+  slice(1:10)
+
+#13 comes up for both, and is better than 5 actually looks pretty good for sensitivity here
 
 
-#okay, so picking the most variably expressed genes didn't seem to do much. What if instead we just
-#give it the FULL gene list and let it do it's thing?
-apo.pred2 <- runClanc("apobec_high", genes = x3$xd[,which(colnames(x3$xd) %in% y$barcode_short2)])
-apo.pred2[[2]]
 
+# Final Evaluations -------------------------------------------------------
 
-#see how a five gene predictor does
+#most variable genes in entire dataset:
 
-apo5 <- clancPredict(x = geneSub[,!is.na(y$apobec_high)], classes = y$apobec_high[!is.na(y$apobec_high)], y = geneSub, ngenes = 5)
-write.table(apo5$centroids, "data/dimarco/apobec_enrichment_gene_predictor_5.txt", sep = "\t")
+#leave fold 10 out and perform full adj fun
+m1 <- fullUnadjFun("foldALL", which(y$sample_fold %in% 1:10))
 
-rownames(apo5$centroids)
-table(true = y$apobec_high, pred = apo5$predictions[,2])
-table(true = y$apobec_high, pred = apo5$predictions[,2]) %>% allStats()
+#now, want to get the most variably expressed genes
+m1.sub <- m1 %>%
+  arrange(desc(fold_change)) %>%
+  #arrange(p_value) %>%
+  slice_head(prop = .05)
 
+#based on the genes in this subsetted list, get a frame of TCGA genes which I can then feed into Clanc
+geneSub <- x3$xd[rownames(x3$xd) %in% m1.sub$gene_name,]
+geneSub <- geneSub[,which(colnames(geneSub) %in% y$barcode_short2)]
+
+#see how  the 13 gene predictor does
+
+apo13 <- clancPredict(x = geneSub[,!is.na(y$apobec_high)], classes = y$apobec_high[!is.na(y$apobec_high)], y = geneSub, ngenes = 13)
+write.table(apo13$centroids, "data/dimarco/apobec_enrichment_gene_predictor_13.txt", sep = "\t")
+
+rownames(apo13$centroids)
+table(true = y$apobec_high, pred = apo13$predictions[,2])
+table(true = y$apobec_high, pred = apo13$predictions[,2]) %>% allStats()
 
 #make a plot of the youden's index
 #also plot the Youden's index, which could be a good addition to the fourth part of the figure
-youden.plot <- apo.cv %>%
+youden.plot <- full %>%
   mutate(youden = as.numeric(sensitivity)/100+as.numeric(specificity)/100-1)%>%
   group_by(ngenes, in_out)%>%
   summarise(avg_y = mean(youden),
@@ -716,14 +903,19 @@ youden.plot <- apo.cv %>%
             .groups = "keep")%>%
   mutate(in_out = case_when(in_out == "in_sample" ~ "Training Set",
                             T ~ "Test Set"))%>%
-  ggplot(aes(y = avg_y, x = as.numeric(ngenes), color = in_out)) + 
-  geom_point(position = position_dodge(width = .5)) + 
-  geom_smooth(se = F) + 
-  geom_ribbon(aes(ymin = avg_y - sd_y, ymax = avg_y + sd_y,fill = in_out), position = position_dodge(width = .5), alpha = .1) +
-  theme_bw() + labs(x = "Genes Per Group", y = "Youden's Index") + guides(color = F, fill = F)
+  ggplot(aes(x = as.numeric(ngenes), y = avg_y, color = in_out)) +
+  geom_point(position = position_dodge(width = .5), size = .5, alpha = .8)+
+  geom_errorbar(aes(ymin = (avg_y - sd_y), ymax = (avg_y + sd_y)), position = position_dodge(width = .5),
+                alpha = .1) +
+  theme_bw() +
+  #ggtitle(paste0("10-Fold Cross Validation of Sensitivity for ", signature)) +
+  labs(x = "Genes Per Group", y = "Youden's Index") +
+  geom_smooth(alpha = .1, aes(color = in_out, fill = in_out), se = F, linetype = "dashed", span = 100) +
+  guides(fill = F, color = F) 
+
 
 #maybe also try the F1 score: 2*((PPV*sens)/(PPV+sens))
-f1.plot <- apo.cv %>%
+f1.plot <- full %>%
   mutate(f1score = 2*((as.numeric(ppv)/100)*((as.numeric(sensitivity)/100))/
                         ((as.numeric(ppv)/100)+((as.numeric(sensitivity)/100)))))%>%
   group_by(ngenes, in_out)%>%
@@ -732,15 +924,22 @@ f1.plot <- apo.cv %>%
             .groups = "keep")%>%
   mutate(in_out = case_when(in_out == "in_sample" ~ "Training Set",
                             T ~ "Test Set"))%>%
-  ggplot(aes(y = avg_y, x = as.numeric(ngenes), color = in_out)) + 
-  geom_point(position = position_dodge(width = .5)) + 
-  geom_smooth(se = F) + 
-  geom_errorbar(aes(ymin = avg_y - sd_y, ymax = avg_y + sd_y), position = position_dodge(width = .5)) +
-  theme_bw() + labs(x = "Genes Per Group", y = "F1 Score") + guides(color = F)
+  ggplot(aes(x = as.numeric(ngenes), y = avg_y, color = in_out)) +
+  geom_point(position = position_dodge(width = .5), size = .5, alpha = .8)+
+  geom_errorbar(aes(ymin = (avg_y - sd_y), ymax = (avg_y + sd_y)), position = position_dodge(width = .5),
+                alpha = .1) +
+  theme_bw() +
+  #ggtitle(paste0("10-Fold Cross Validation of Sensitivity for ", signature)) +
+  labs(x = "Genes Per Group", y = "Youden's Index") +
+  geom_smooth(alpha = .1, aes(color = in_out, fill = in_out), se = F, linetype = "dashed", span = 100) +
+  guides(fill = F, color = F) 
+
+#13 genes looks like it does pretty well. Make a figure showing sensitivity, specificity, f1 score and then a confusion matrix
+
 
 
 #make a plottable confusion matrix
-conf <- data.frame(table(Expression = apo5$predictions[,2], WES = y$apobec_high))
+conf <- data.frame(table(Expression = apo13$predictions[,2], WES = y$apobec_high))
 
 plotTable <- conf %>%
   mutate(goodbad = ifelse(Expression == WES, "correct", "incorrect")) %>%
@@ -767,16 +966,76 @@ confMatrix <- plotTable %>%
 library(patchwork)
 #finally, make the overall figure
 pdf("data/dimarco/tcga_classifier_results_v2.pdf")
-(apoCVplot[[1]] + apoCVplot[[2]] + plot_layout(guides = "collect"))/
+(plots[[1]] + plots[[2]] + plot_layout(guides = "collect"))/
   (youden.plot + confMatrix) + plot_annotation(tag_levels = "a")
 dev.off()
 
 
+
+# Updated RNASeq Data for Mice -----------------------------------------------------
+
+fvb <- read.table("data/dimarco/FVB_Tumors_DESeq2_Normalizedcounts_Mixture_File3.txt", sep = "\t", header = T)
+nsg <- read.table("data/dimarco/NSG_Tumors_DESeq2_Normalizedcounts_Mixture.txt", sep = "\t", header = T)
+
+#these appear to be already normalized per the name, but most likely are not median centered. Double check
+fvb.genes <- fvb[,-1]
+nsg.gense <- nsg[,-1]
+
+fvb.genes <- fvb.genes %>%
+  medianCtr()
+
+nsg.gense <- nsg.gense %>%
+  medianCtr()
+
+#fvb$GeneSymbol[(str_detect(fvb$GeneSymbol, "C17"))]
+
+rownames(fvb.genes) <- fvb$GeneSymbol
+rownames(nsg.gense) <- nsg$GeneSymbol
+
+#need to rename some of the rows so they have the same names as in x2
+fvb.sub <- fvb.genes[rownames(fvb.genes) %in% toupper(sapply(str_split(rownames(apo13$centroids), "\\|"), "[[",1)),]
+nsg.sub <- nsg.gense[rownames(nsg.gense) %in% toupper(sapply(str_split(rownames(apo13$centroids), "\\|"), "[[",1)),]
+
+#some of the genes are missing. Which ones?
+toupper(sapply(str_split(rownames(apo13$centroids), "\\|"), "[[",1))[
+  !toupper(sapply(str_split(rownames(apo13$centroids), "\\|"), "[[",1)) %in% rownames(nsg.sub)]
+
+#"LOC100131691" "ZNF703"       "ZNF425"       "VNN2"
+
+
+#now rename to have the same names as in the human version
+genelist <- sort(rownames(apo13$centroids))
+
+#rename rows to correspond exactly to the genelsit
+rownames(nsg.sub) <- rownames(fvb.sub) <-c(genelist[1:9], genelist[11:23])
+
+
+for(i in 1:length(genelist)){
+  print(noquote(genelist[i]))
+}
+
+
+#can now use the classifier to predict the apobec_high nature of the samples
+fvb.pred <- clancPredict(x = geneSub[,!is.na(y$apobec_high)], 
+                         classes = y$apobec_high[!is.na(y$apobec_high)], y = fvb.sub,
+                         ngenes = 13)
+nsg.pred <- clancPredict(x = geneSub[,!is.na(y$apobec_high)], 
+                         classes = y$apobec_high[!is.na(y$apobec_high)], y = nsg.sub,
+                         ngenes = 13)
+fvb.pred$predictions
+nsg.pred$predictions
+
+
+#finally, add the mouse prediction data to the figure
 #maybe also try to add the mouse validation to the same figure?
+
+#just do for FVB
 
 new.df <- data.frame(WES = c(1,2,1,2),
                      Expression = c(1,1,2,2),
-                     Freq = c(7,5,5,7))
+                     Freq = c(5,1,3,3))
+
+#only in the NSG mice
 
 plotTable2 <- new.df%>%
   mutate(goodbad = ifelse(Expression == WES, "correct", "incorrect")) %>%
@@ -801,214 +1060,21 @@ confMatrix2 <- plotTable2 %>%
         panel.grid = element_blank())
 
 
-cf1 <- (confMatrix + ggtitle ("TCGA")+ theme(plot.title = element_text(hjust  = .5))) + 
+cf1 <- (confMatrix + ggtitle ("TCGA")+ theme(plot.title = element_text(hjust  = .5))) +
   (confMatrix2 + ggtitle("Mouse") + theme(plot.title = element_text(hjust  = .5)))
 
 #finally, make the overall figure
-pdf("data/dimarco/tcga_classifier_results_v3.pdf",width = 8.5, height = 10)
-(apoCVplot[[1]] + apoCVplot[[2]] + plot_layout(guides = "collect"))/
+pdf("data/dimarco/tcga_classifier_results_v4.pdf",width = 8.5, height = 10)
+(plots[[1]] + plots[[2]] + plot_layout(guides = "collect"))/
   (youden.plot + cf1) + plot_annotation(tag_levels = "a")
 dev.off()
 
-tiff(file = "data/dimarco/tcga_classifier_results_v3.tiff", width = 6600, height = 7000, units = "px", res = 800)
-(apoCVplot[[1]] + apoCVplot[[2]] + plot_layout(guides = "collect"))/
+tiff(file = "data/dimarco/tcga_classifier_results_v4.tiff", width = 6600, height = 7000, units = "px", res = 800)
+(plots[[1]] + plots[[2]] + plot_layout(guides = "collect"))/
   (youden.plot + cf1) + plot_annotation(tag_levels = "a")
 dev.off()
 
-#per andrea, try removing the genes that were not available in the mouse data from TCGA and seeing how the classifier
-#performs
 
-tcga.subset <- x2[!rownames(x2) %in% c("apobec3d_140564_51", "apobec3f_200316_51", "apobec3h_164668_51","apobec3g_60489_51",
-                                       "apobec3c_27350_51", "magef1_64110_cta", "znf165_7718_cta", "mtmr15_22909_184" ),]
-
-tcga.subset.pred <- clancPredict(x = x2[!is.na(y$apobec_high)],
-                                 classes = y$apobec_high[!is.na(y$apobec_high)],
-                                 y = tcga.subset, 21)
-
-t(table(pred = tcga.subset.pred$predictions[,2], true = y$apobec_high)) %>% allStats()
-
-# Updated RNASeq Data -----------------------------------------------------
-
-fvb <- read.table("data/dimarco/FVB_Tumors_DESeq2_Normalizedcounts_Mixture_File3.txt", sep = "\t", header = T)
-nsg <- read.table("data/dimarco/NSG_Tumors_DESeq2_Normalizedcounts_Mixture.txt", sep = "\t", header = T)
-
-#these appear to be already normalized per the name, but most likely are not median centered. Double check
-fvb.genes <- fvb[,-1]
-nsg.gense <- nsg[,-1]
-
-fvb.genes <- fvb.genes %>%
-  medianCtr()
-
-nsg.gense <- nsg.gense %>%
-  medianCtr()
-
-#fvb$GeneSymbol[(str_detect(fvb$GeneSymbol, "C17"))]
-
-rownames(fvb.genes) <- fvb$GeneSymbol
-rownames(nsg.gense) <- nsg$GeneSymbol
-
-#need to rename some of the rows so they have the same names as in x2
-fvb.sub <- fvb.genes[rownames(fvb.genes) %in% toupper(sapply(str_split(rownames(apo5$centroids), "\\|"), "[[",1)),]
-nsg.sub <- nsg.gense[rownames(nsg.gense) %in% toupper(sapply(str_split(rownames(apo5$centroids), "\\|"), "[[",1)),]
-
-#nags, znf425, loc147727
-
-
-#some of the genes are missing. Which ones?
-toupper(sapply(str_split(rownames(apo21$centroids), "_"), "[[",1))[!
-          toupper(sapply(str_split(rownames(apo21$centroids), "_"), "[[",1)) %in% rownames(nsg.sub)]
-
-
-
-#RAD51D should replace RAD51L3; replace all the apobec3 with mouse apobec; faap100 = c17orf
-fvb.sub <- fvb.genes[rownames(fvb.genes) %in% c("APOBEC3","FAAP100", "RAD51D",
-                                                toupper(sapply(str_split(rownames(apo21$centroids), "_"), "[[",1)) ),]
-nsg.sub <- nsg.gense[rownames(nsg.gense) %in% c("APOBEC3", "FAAP100", "RAD51D",
-                                                toupper(sapply(str_split(rownames(apo21$centroids), "_"), "[[",1))),]
-
-#duplicate the multiple version of apobec3 using the single gene that mice have (need 6 total, so five more)
-#still missing magef1 and ZNF165 but that can't be helped, mtmr15
-nsg.sub <- rbind(nsg.sub, nsg.sub[1,],nsg.sub[1,],nsg.sub[1,],nsg.sub[1,],nsg.sub[1,])
-fvb.sub <- rbind(fvb.sub, fvb.sub[1,],fvb.sub[1,],fvb.sub[1,],fvb.sub[1,],fvb.sub[1,])
-
-#now rename to have the same names as in the human version
-genelist <- sort(rownames(apo5$centroids))
-
-#rename rows to correspond exactly to the genelsit
-rownames(nsg.sub) <- rownames(fvb.sub) <-c(genelist[1], genelist[2], genelist[4:8])
-
-"LOC100130148|100130148"
-"SIRPG|55423"
-"VNN2|8875"
-
-rownames(nsg.sub) <- rownames(fvb.sub) <- c(genelist[1], genelist[7], genelist[8], genelist[10],
-                                            genelist[11], genelist[12], genelist[13], genelist[14],
-                                            genelist[15], genelist[16], genelist[17], genelist[18],
-                                            genelist[19], genelist[9], genelist[20], genelist[21], genelist[22],
-                                            genelist[23], genelist[25],  genelist[27], genelist[28], genelist[29],
-                                            genelist[30], genelist[31], genelist[32], genelist[33], genelist[34],
-                                            genelist[35], genelist[36], genelist[37], genelist[38], genelist[39],
-                                            genelist[40], genelist[41], genelist[2], genelist[3], genelist[4], genelist[5],
-                                            genelist[6])
-
-nsg.sub <- nsg.sub[1:34,]
-fvb.sub <- fvb.sub[1:34,]
-
-for(i in 1:length(genelist)){
-  print(noquote(genelist[i]))
-}
-
-
-#can now use the classifier to predict the apobec_high nature of the samples
-fvb.pred <- clancPredict(x = geneSub[,!is.na(y$apobec_high)], 
-                         classes = y$apobec_high[!is.na(y$apobec_high)], y = fvb.sub,
-                         ngenes = 5)
-nsg.pred <- clancPredict(x = geneSub[,!is.na(y$apobec_high)], 
-                         classes = y$apobec_high[!is.na(y$apobec_high)], y = nsg.sub,
-                         ngenes = 5)
-fvb.pred$predictions
-nsg.pred$predictions
-
-
-# Can also try to train predictor on the mouse data alone -------------------
-
-#couple of approaches to try: 1. Train on one mouse dataset, test on the other
-runTuneB <- function(i, x1 = fvb.genes){
-  
-  #depending on what signature is given, subset x1/x3 based into stratified training and test set
-  mysig <- c(rep(1,6), rep(2,6))
-  
-  Pre <-clancPredict(x1[,!is.na(mysig)],mysig[!is.na(mysig)],
-                     x1[,!is.na(mysig)], i) 
-  
-  
-  t1 <- table(mysig[!is.na(mysig)],Pre$predictions[,2])
-  
-  t1Stats <- allStats(t1)
-  
-  df <- rbind.data.frame(c(unlist(allStats(t1)), "full", i))
-  names(df) <- c("percent_correct", "sensitivity", "specificity", "ppv", "npv", "mod_type", "ngenes")
-  
-  return(df)
-  
-}
-
-#function to do everything: run the algorithm on full sample, make plots
-#then run algorithm on test/training set and make plots; return both data frames
-runClancB <- function(df){
-  
-  #for all genes
-  myTune <- purrr::map_dfr(.x = 1:100, .f = ~runTuneB(i = .x,df))
-  plot1 <- rocPlot(myTune,  "")
-  
-  
-  return(list(all.genes.df = myTune, roc1 = plot1))
-}
-
-
-
-fvb.clanc <- runClancB(fvb.genes)
-fvb.clanc[[1]] #basically completely perfect prediction
-
-nsg.clanc <- runClancB(nsg.gense)
-nsg.clanc[[2]] #again, basically completely perfect prediction
-
-clancPredict(x = fvb.genes, classes = c(rep(1,6), rep(2,6)), y = nsg.gense,1)
-clancPredict(y = fvb.genes, classes = c(rep(1,6), rep(2,6)), x = nsg.gense,10)
-
-#2. 10 fold CV within a set; probably best way to do it is to
-# make a 9/3 split; train on the 9 and test on the 3. Repeat 100 times to
-# get idea of how well predictions are made
-
-newTuneTrain <- function(df, i){
-  
-  #split into test and training set
-  test <- sample(1:12, 3, F)
-  train <- c(1:12)[-test]
-  
-  #get "ground truth" of that the apobec/control arms are
-  test.status <- ifelse(test <= 6, 1, 2)
-  train.status <- ifelse(train <= 6, 1, 2)
-  
-  
-  #subset the expression data into test/train
-  test.ex <- df[,test]
-  train.ex <- df[,train]
-  
-  #in sample prediction
-  Pre <-clancPredict(train.ex, train.status,
-                     train.ex, i) 
-  t1 <- table(train.status,Pre$predictions[,2])
-  
-  #out of sample prediction
-  Pre2 <-clancPredict(train.ex, train.status,
-                      test.ex, i) 
-  t2 <- table(test.status, Pre2$predictions[,2])
-  
-  df <- rbind.data.frame(c(unlist(allStats(t1)), "full", i, "in_sample"),
-                         c(unlist(allStats(t2)), "full", i,  "out_sample"))
-  
-  names(df) <- c("percent_correct", "sensitivity", "specificity", "ppv", "npv", "mod_type", "ngenes", "in_out")
-  
-  return(df)
-  
-}
-
-newClancCV <- function(df1){
-  for (i in 1:20){
-    if (i == 1){
-      full <-  purrr::map_dfr(.x = 1:23, .f = ~newTuneTrain(i = .x, df = df1))
-      
-    } else {
-      f <- purrr::map_dfr(.x = 1:23, .f = ~newTuneTrain(i = .x, df = df1))
-      full <- bind_rows(full, f)
-    }
-  }
-  
-  return(full)
-}
-
-fvb.tt <- newClancCV(fvb.genes) #still essentially getting perfect predictions
 
 
 # Forest Plots ------------------------------------------------------------
